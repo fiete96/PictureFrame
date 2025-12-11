@@ -1,0 +1,27 @@
+[Unit]
+Description=Picture Frame - Digital Picture Frame Application
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Port 80 erfordert root-Rechte, aber GUI braucht User pi
+# Verwende setcap für Python, um Port 80 zu binden
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/PictureFrameV3
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/pi/.Xauthority"
+# Warte auf LightDM/X11
+ExecStartPre=/bin/sleep 10
+# Verwende setcap-enabled Python für Port 80
+ExecStart=/usr/bin/python3 /home/pi/PictureFrameV3/src/main.py
+Restart=always
+RestartSec=10
+# Starte nach graphical.target (wenn verfügbar) oder network.target
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
