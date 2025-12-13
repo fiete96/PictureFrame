@@ -482,7 +482,12 @@
         <!-- System-Tab -->
         <div id="system" class="tab-content">
             <h2>Systeminformationen</h2>
-            <div id="system-info" class="loading">Lade Informationen...</div>
+            <div style="margin-bottom: 20px;">
+                <button class="btn" onclick="loadSystemInfo()" style="background: #3498db;">
+                    🔄 Informationen aktualisieren
+                </button>
+            </div>
+            <div id="system-info" class="loading">Klicken Sie auf "Informationen aktualisieren" um die Systeminformationen zu laden.</div>
         </div>
     </div>
     
@@ -547,9 +552,9 @@
                 loadImages();
             } else if (tabName === 'settings') {
                 loadSettings();
-            } else if (tabName === 'system') {
-                loadSystemInfo();
             }
+            // System-Info wird nicht automatisch geladen (zu langsam)
+            // Nutzer muss auf "Informationen aktualisieren" klicken
         }
         
         // Bilder laden
@@ -1031,6 +1036,9 @@
         
         // Systeminformationen laden
         async function loadSystemInfo() {
+            const infoDiv = document.getElementById('system-info');
+            infoDiv.innerHTML = '<div class="loading">Lade Informationen...</div>';
+            
             try {
                 const response = await fetch('/api/system/info');
                 const info = await response.json();
@@ -1045,7 +1053,7 @@
                         <p><strong>Proxy-Bilder:</strong> ${info.proxy_images}</p>
                         <p><strong>Original-Bilder:</strong> ${info.original_images}</p>
                         <p><strong>Eindeutige Bilder:</strong> ${info.unique_images || info.proxy_images}</p>
-                        <p><strong>Duplikate:</strong> <span style="color: ${info.duplicates > 0 ? '#f39c12' : '#2ecc71'}">${info.duplicates || 0}</span></p>
+                        <p><strong>Duplikate:</strong> <span style="color: #bdc3c7;">Berechnung deaktiviert (Performance)</span></p>
                     </div>
                     
                     <div class="info-box" style="margin-top: 20px;">

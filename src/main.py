@@ -135,28 +135,29 @@ def main():
                 from PyQt5.QtWidgets import QApplication
                 from PyQt5.QtCore import Qt
                 
-    app = QApplication(sys.argv)
-    app.setApplicationName("Picture Frame")
-    
-    # Konfiguriere Emoji-Font-Unterstützung
-    try:
-        from PyQt5.QtGui import QFontDatabase
-        # Versuche Emoji-Fonts zu laden
-        font_db = QFontDatabase()
-        # Prüfe verfügbare Fonts für Emoji-Unterstützung
-        emoji_fonts = ['Noto Color Emoji', 'Noto Emoji', 'Apple Color Emoji', 'Segoe UI Emoji']
-        emoji_font_found = False
-        for font_name in emoji_fonts:
-            if font_db.hasFamily(font_name):
-                logger.info(f"Emoji-Font gefunden: {font_name}")
-                emoji_font_found = True
-                break
-        
-        if not emoji_font_found:
-            logger.warning("Kein Emoji-Font gefunden. Emojis werden möglicherweise nicht korrekt angezeigt.")
-            logger.info("Installieren Sie 'fonts-noto-color-emoji' für Emoji-Unterstützung.")
-    except Exception as e:
-        logger.warning(f"Fehler beim Konfigurieren der Emoji-Fonts: {e}")
+                app = QApplication(sys.argv)
+                app.setApplicationName("Picture Frame")
+                
+                # Konfiguriere Emoji-Font-Unterstützung
+                try:
+                    from PyQt5.QtGui import QFontDatabase
+                    # Versuche Emoji-Fonts zu laden
+                    font_db = QFontDatabase()
+                    # Prüfe verfügbare Fonts für Emoji-Unterstützung
+                    emoji_fonts = ['Noto Color Emoji', 'Noto Emoji', 'Apple Color Emoji', 'Segoe UI Emoji']
+                    emoji_font_found = False
+                    for font_name in emoji_fonts:
+                        if font_db.hasFamily(font_name):
+                            logger.info(f"Emoji-Font gefunden: {font_name}")
+                            emoji_font_found = True
+                            break
+                    
+                    if not emoji_font_found:
+                        logger.warning("Kein Emoji-Font gefunden. Emojis werden möglicherweise nicht korrekt angezeigt.")
+                        logger.info("Installieren Sie 'fonts-noto-color-emoji' für Emoji-Unterstützung.")
+                except Exception as e:
+                    logger.warning(f"Fehler beim Konfigurieren der Emoji-Fonts: {e}")
+                
                 # Stelle sicher, dass die App einen dunklen Hintergrund hat
                 # Nur für QMainWindow und QWidget ohne spezifische Styles
                 app.setStyleSheet("""

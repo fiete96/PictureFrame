@@ -775,19 +775,11 @@ class WebInterface:
             original_files = [f for f in original_dir.rglob("*") if f.is_file() and self.image_processor.is_supported(f)] if original_dir.exists() else []
             original_count = len(original_files)
             
-            # Berechne Duplikate (Bilder mit gleichem Hash)
-            hash_counts = {}
-            for orig_file in original_files:
-                try:
-                    file_hash = self.image_processor._get_file_hash(orig_file)
-                    hash_counts[file_hash] = hash_counts.get(file_hash, 0) + 1
-                except Exception as e:
-                    logger.warning(f"Fehler beim Berechnen des Hashs für {orig_file}: {e}")
-                    continue
-            
-            # Zähle Duplikate (Bilder, die mehr als einmal vorkommen)
-            duplicates = sum(count - 1 for count in hash_counts.values() if count > 1)
-            unique_images = len(hash_counts)
+            # Duplikat-Berechnung deaktiviert (zu langsam bei vielen Bildern)
+            # Die Hash-Berechnung für jedes Bild würde zu lange dauern
+            # Verwende Proxy-Count als Näherung für eindeutige Bilder
+            duplicates = 0
+            unique_images = proxy_count  # Näherung: Proxy-Count entspricht eindeutigen Bildern
             
             # Berechne Speicherbedarf
             def get_dir_size(path):
@@ -880,11 +872,19 @@ class WebInterface:
                         'logs': update_log
                     }), 500
                 
-                # Führe Git Pull aus
-                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Führe 'git pull' aus...")
+                # Führe Git Pull aus (explizit origin/main angeben)
+                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Führe 'git pull origin main' aus...")
                 try:
+                    # Stelle sicher, dass der Branch richtig konfiguriert ist
+                    subprocess.run(
+                        ['git', 'branch', '--set-upstream-to=origin/main', 'main'],
+                        cwd=str(project_dir),
+                        capture_output=True,
+                        timeout=5
+                    )
+                    
                     result = subprocess.run(
-                        ['git', 'pull'],
+                        ['git', 'pull', 'origin', 'main'],
                         cwd=str(project_dir),
                         capture_output=True,
                         text=True,
@@ -927,8 +927,9 @@ class WebInterface:
                     
                     # Starte Service neu
                     try:
+                        # Versuche zuerst mit sudo -n (non-interactive)
                         restart_result = subprocess.run(
-                            ['sudo', 'systemctl', 'restart', 'pictureframe'],
+                            ['sudo', '-n', 'systemctl', 'restart', 'pictureframe'],
                             capture_output=True,
                             text=True,
                             timeout=30
@@ -936,13 +937,39 @@ class WebInterface:
                         
                         if restart_result.returncode == 0:
                             update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service erfolgreich neu gestartet")
+                            # Warte kurz und prüfe Status
+                            time.sleep(2)
+                            status_result = subprocess.run(
+                                ['systemctl', 'is-active', 'pictureframe'],
+                                capture_output=True,
+                                text=True,
+                                timeout=5
+                            )
+                            if status_result.returncode == 0:
+                                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service ist aktiv: {status_result.stdout.strip()}")
+                            else:
+                                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service-Status Warnung: {status_result.stdout.strip()}")
                         else:
-                            update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service-Restart Warnung: {restart_result.stderr}")
+                            error_msg = restart_result.stderr.strip() if restart_result.stderr else restart_result.stdout.strip()
+                            update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service-Restart fehlgeschlagen (Code {restart_result.returncode}): {error_msg}")
+                            # Versuche Status zu prüfen
+                            try:
+                                status_result = subprocess.run(
+                                    ['systemctl', 'status', 'pictureframe', '--no-pager', '-l'],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=5
+                                )
+                                if status_result.stdout:
+                                    update_log.append(f"Service-Status:\n{status_result.stdout[:500]}")
+                            except:
+                                pass
                             
                     except subprocess.TimeoutExpired:
-                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service-Restart Timeout")
+                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service-Restart Timeout (länger als 30 Sekunden)")
                     except Exception as e:
                         update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service-Restart Fehler: {str(e)}")
+                        logger.error(f"Fehler beim Service-Restart: {e}", exc_info=True)
                 else:
                     update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Keine Änderungen - bereits auf dem neuesten Stand")
                 
