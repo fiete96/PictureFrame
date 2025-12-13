@@ -872,6 +872,31 @@ class WebInterface:
                         'logs': update_log
                     }), 500
                 
+                # Prüfe auf lokale Änderungen
+                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Prüfe auf lokale Änderungen...")
+                status_result = subprocess.run(
+                    ['git', 'status', '--porcelain'],
+                    cwd=str(project_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                
+                has_local_changes = bool(status_result.stdout.strip())
+                if has_local_changes:
+                    update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Lokale Änderungen gefunden. Stashe Änderungen...")
+                    stash_result = subprocess.run(
+                        ['git', 'stash', 'push', '-m', f'Auto-stash vor Update {datetime.now().isoformat()}'],
+                        cwd=str(project_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    if stash_result.returncode == 0:
+                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Lokale Änderungen gestasht")
+                    else:
+                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Stash-Warnung: {stash_result.stderr}")
+                
                 # Führe Git Pull aus (explizit origin/main angeben)
                 update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Führe 'git pull origin main' aus...")
                 try:
