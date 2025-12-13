@@ -16,6 +16,7 @@ fi
 echo "Installiere System-Abhängigkeiten..."
 sudo apt-get update
 sudo apt-get install -y \
+    git \
     python3-pip \
     python3-pyqt5 \
     python3-dev \
