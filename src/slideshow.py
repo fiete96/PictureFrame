@@ -147,6 +147,10 @@ class Slideshow:
         
         if self.current_index >= len(self.images):
             if self.loop:
+                # Bei Random-Sortierung: Liste neu mischen beim Loop
+                if self.sort_by == "random":
+                    random.shuffle(self.images)
+                    logger.info("Random-Playlist neu gemischt beim Loop")
                 self.current_index = 0
             else:
                 self.current_index = len(self.images) - 1
@@ -162,6 +166,10 @@ class Slideshow:
         
         if self.current_index < 0:
             if self.loop:
+                # Bei Random-Sortierung: Liste neu mischen beim Loop
+                if self.sort_by == "random":
+                    random.shuffle(self.images)
+                    logger.info("Random-Playlist neu gemischt beim Loop (rückwärts)")
                 self.current_index = len(self.images) - 1
             else:
                 self.current_index = 0

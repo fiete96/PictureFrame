@@ -1035,10 +1035,26 @@ class SlideshowWidget(QWidget):
     
     def refresh(self):
         """Aktualisiert die Slideshow"""
-        self.slideshow.refresh()
-        # Reset Zoom beim Refresh
-        self.reset_zoom()
-        self.load_current_image(use_fade=False)  # Kein Fade beim Refresh (neue Bilder)
+        try:
+            old_count = self.slideshow.get_image_count()
+            self.slideshow.refresh()
+            new_count = self.slideshow.get_image_count()
+            
+            # Reset Zoom beim Refresh
+            self.reset_zoom()
+            
+            # Wenn vorher keine Bilder vorhanden waren und jetzt welche vorhanden sind,
+            # stelle sicher dass current_index auf 0 gesetzt ist
+            if old_count == 0 and new_count > 0:
+                self.slideshow.current_index = 0
+                logger.info(f"Slideshow hatte keine Bilder, jetzt {new_count} Bilder - lade erstes Bild")
+            
+            # Lade aktuelles Bild ASYNCHRON (verhindert UI-Blockierung)
+            # Verwende QTimer.singleShot um das Laden im nächsten Event-Loop-Zyklus auszuführen
+            if new_count > 0:
+                QTimer.singleShot(0, lambda: self.load_current_image(use_fade=False))
+        except Exception as e:
+            logger.error(f"Fehler beim Refresh der Slideshow: {e}", exc_info=True)
     
     def resizeEvent(self, event):
         """Wird aufgerufen wenn Widget-Größe sich ändert"""
@@ -1330,7 +1346,7 @@ class WifiSettingsWidget(QWidget):
         self.keyboard_widget = None
     
     def scan_networks(self):
-        """Scannt nach verfügbaren WLAN-Netzwerken"""
+        """Scannt nach verfügbaren WLAN-Netzwerken und lädt bekannte Netzwerke"""
         # Lösche alte Netzwerke
         while self.network_layout.count():
             child = self.network_layout.takeAt(0)
@@ -1351,6 +1367,23 @@ class WifiSettingsWidget(QWidget):
         def scan():
             try:
                 logger.info("Starte WLAN-Scan...")
+                
+                # Lade bekannte Netzwerke (bereits konfigurierte)
+                known_networks = set()
+                try:
+                    logger.info("Lade bekannte Netzwerke...")
+                    result = subprocess.run(['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show'], 
+                                          capture_output=True, text=True, timeout=10)
+                    if result.returncode == 0:
+                        for line in result.stdout.strip().split('\n'):
+                            if ':802-11-wireless' in line or ':wifi' in line:
+                                parts = line.split(':')
+                                if len(parts) > 0:
+                                    conn_name = parts[0]
+                                    known_networks.add(conn_name)
+                        logger.info(f"Bekannte Netzwerke gefunden: {len(known_networks)}")
+                except Exception as e:
+                    logger.warning(f"Fehler beim Laden bekannter Netzwerke: {e}")
                 
                 # Starte einen aktiven Scan (rescan) um alle verfügbaren Netzwerke zu finden
                 logger.info("Starte aktiven WLAN-Rescan...")
@@ -1415,18 +1448,24 @@ class WifiSettingsWidget(QWidget):
                                 if ssid and ssid != "--":  # Ignoriere leere SSIDs und "--"
                                     try:
                                         signal_int = int(signal) if signal.isdigit() else 0
+                                        # Prüfe ob Netzwerk bekannt ist
+                                        is_known = ssid in known_networks
                                         networks.append({
                                             'ssid': ssid,
                                             'signal': signal,
-                                            'security': security
+                                            'security': security,
+                                            'known': is_known
                                         })
                                     except:
                                         pass
                 
                 logger.info(f"Gefundene Netzwerke: {len(networks)}")
                 
-                # Sortiere nach Signalstärke (höchste zuerst)
-                networks.sort(key=lambda x: int(x['signal']) if x['signal'].isdigit() else 0, reverse=True)
+                # Sortiere: Bekannte zuerst, dann nach Signalstärke
+                networks.sort(key=lambda x: (
+                    not x['known'],  # Bekannte zuerst (False < True)
+                    -int(x['signal']) if x['signal'].isdigit() else 0  # Dann nach Signalstärke
+                ))
                 
                 # Entferne Duplikate (behalte nur die beste Signalstärke)
                 seen = set()
@@ -1436,7 +1475,7 @@ class WifiSettingsWidget(QWidget):
                         seen.add(net['ssid'])
                         unique_networks.append(net)
                 
-                logger.info(f"Eindeutige Netzwerke: {len(unique_networks)}")
+                logger.info(f"Eindeutige Netzwerke: {len(unique_networks)} (davon {sum(1 for n in unique_networks if n['known'])} bekannt)")
                 
                 # Aktualisiere UI über Signal (thread-safe)
                 self.networks_found.emit(unique_networks)
@@ -1453,7 +1492,7 @@ class WifiSettingsWidget(QWidget):
         scan_thread.start()
     
     def display_networks(self, networks):
-        """Zeigt die gefundenen Netzwerke an"""
+        """Zeigt die gefundenen Netzwerke an mit Unterscheidung zwischen bekannten und unbekannten"""
         logger.info(f"display_networks aufgerufen mit {len(networks)} Netzwerken")
         
         # Lösche Ladeanzeige
@@ -1470,37 +1509,121 @@ class WifiSettingsWidget(QWidget):
             self.network_layout.addWidget(no_networks)
             return
         
-        # Zeige jedes Netzwerk als Button
-        for network in networks:
-            ssid = network['ssid']
-            signal = network['signal']
-            security = network['security']
+        # Trenne bekannte und unbekannte Netzwerke
+        known_networks = [n for n in networks if n.get('known', False)]
+        unknown_networks = [n for n in networks if not n.get('known', False)]
+        
+        # Zeige bekannte Netzwerke zuerst
+        if known_networks:
+            known_label = QLabel("Bekannte Netzwerke:")
+            known_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #2ecc71; padding: 15px 0 5px 0;")
+            self.network_layout.addWidget(known_label)
             
-            # Erstelle Netzwerk-Button
-            network_btn = QPushButton()
-            network_btn.setStyleSheet("""
-                QPushButton {
-                    font-size: 18px; 
-                    font-weight: bold; 
-                    padding: 15px; 
-                    background: #2c3e50; 
-                    color: #ecf0f1; 
-                    border: 2px solid #34495e; 
-                    border-radius: 10px;
-                    text-align: left;
-                }
-                QPushButton:hover {
-                    background: #34495e;
-                    border-color: #3498db;
-                }
-            """)
+            for network in known_networks:
+                ssid = network['ssid']
+                signal = network['signal']
+                security = network['security']
+                
+                # Container für Netzwerk-Button und Löschen-Button
+                network_container = QHBoxLayout()
+                network_container.setSpacing(10)
+                
+                # Erstelle Netzwerk-Button für bekanntes Netzwerk
+                network_btn = QPushButton()
+                network_btn.setStyleSheet("""
+                    QPushButton {
+                        font-size: 18px; 
+                        font-weight: bold; 
+                        padding: 15px; 
+                        background: #27ae60; 
+                        color: #ffffff; 
+                        border: 2px solid #2ecc71; 
+                        border-radius: 10px;
+                        text-align: left;
+                    }
+                    QPushButton:hover {
+                        background: #2ecc71;
+                        border-color: #27ae60;
+                    }
+                """)
+                
+                # Text mit Signalstärke und Sicherheit
+                signal_text = f"{signal}%" if signal.isdigit() else "?"
+                security_icon = "🔒" if security else "🔓"
+                network_btn.setText(f"✓ {security_icon} {ssid} ({signal_text})")
+                # Bei bekannten Netzwerken direkt verbinden (ohne Passwort-Dialog)
+                network_btn.clicked.connect(lambda checked, s=ssid, sec=security, known=True: self.connect_to_network(s, sec, known))
+                network_container.addWidget(network_btn, stretch=1)
+                
+                # Löschen-Button für bekanntes Netzwerk
+                delete_btn = QPushButton("🗑️")
+                delete_btn.setStyleSheet("""
+                    QPushButton {
+                        font-size: 20px; 
+                        font-weight: bold; 
+                        padding: 15px 20px; 
+                        background: #e74c3c; 
+                        color: #ffffff; 
+                        border: 2px solid #c0392b; 
+                        border-radius: 10px;
+                        min-width: 60px;
+                    }
+                    QPushButton:hover {
+                        background: #c0392b;
+                        border-color: #e74c3c;
+                    }
+                """)
+                delete_btn.setToolTip(f"Netzwerk {ssid} löschen")
+                delete_btn.clicked.connect(lambda checked, s=ssid: self.delete_network(s))
+                network_container.addWidget(delete_btn)
+                
+                # Container-Widget erstellen
+                container_widget = QWidget()
+                container_widget.setLayout(network_container)
+                self.network_layout.addWidget(container_widget)
+        
+        # Zeige unbekannte Netzwerke
+        if unknown_networks:
+            if known_networks:
+                separator = QLabel("")
+                separator.setStyleSheet("height: 10px;")
+                self.network_layout.addWidget(separator)
             
-            # Text mit Signalstärke und Sicherheit
-            signal_text = f"{signal}%" if signal.isdigit() else "?"
-            security_icon = "🔒" if security else "🔓"
-            network_btn.setText(f"{security_icon} {ssid} ({signal_text})")
-            network_btn.clicked.connect(lambda checked, s=ssid, sec=security: self.connect_to_network(s, sec))
-            self.network_layout.addWidget(network_btn)
+            unknown_label = QLabel("Verfügbare Netzwerke:")
+            unknown_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #ecf0f1; padding: 15px 0 5px 0;")
+            self.network_layout.addWidget(unknown_label)
+            
+            for network in unknown_networks:
+                ssid = network['ssid']
+                signal = network['signal']
+                security = network['security']
+                
+                # Erstelle Netzwerk-Button für unbekanntes Netzwerk
+                network_btn = QPushButton()
+                network_btn.setStyleSheet("""
+                    QPushButton {
+                        font-size: 18px; 
+                        font-weight: bold; 
+                        padding: 15px; 
+                        background: #2c3e50; 
+                        color: #ecf0f1; 
+                        border: 2px solid #34495e; 
+                        border-radius: 10px;
+                        text-align: left;
+                    }
+                    QPushButton:hover {
+                        background: #34495e;
+                        border-color: #3498db;
+                    }
+                """)
+                
+                # Text mit Signalstärke und Sicherheit
+                signal_text = f"{signal}%" if signal.isdigit() else "?"
+                security_icon = "🔒" if security else "🔓"
+                network_btn.setText(f"{security_icon} {ssid} ({signal_text})")
+                # Bei unbekannten Netzwerken Passwort-Dialog zeigen
+                network_btn.clicked.connect(lambda checked, s=ssid, sec=security, known=False: self.connect_to_network(s, sec, known))
+                self.network_layout.addWidget(network_btn)
         
         self.network_layout.addStretch()
     
@@ -1517,16 +1640,22 @@ class WifiSettingsWidget(QWidget):
         error_label.setWordWrap(True)
         self.network_layout.addWidget(error_label)
     
-    def connect_to_network(self, ssid, security):
+    def connect_to_network(self, ssid, security, known=False):
         """Verbindet mit dem ausgewählten Netzwerk"""
         self.selected_ssid = ssid
+        
+        # Wenn bekanntes Netzwerk: Direkt verbinden (Passwort ist bereits gespeichert)
+        if known:
+            logger.info(f"Verbinde mit bekanntem Netzwerk: {ssid}")
+            self.connect_known_network(ssid)
+            return
         
         # Wenn kein Passwort benötigt (offenes Netzwerk)
         if not security or security == "":
             self.connect_with_password("")
             return
         
-        # Zeige Passwort-Dialog
+        # Zeige Passwort-Dialog für unbekannte Netzwerke
         self.show_password_dialog(ssid)
     
     def show_password_dialog(self, ssid):
@@ -1633,6 +1762,65 @@ class WifiSettingsWidget(QWidget):
         # Setze Fokus auf Passwort-Feld nach kurzer Verzögerung (öffnet Tastatur automatisch)
         QTimer.singleShot(300, lambda: password_input.setFocus())
     
+    def connect_known_network(self, ssid):
+        """Verbindet mit einem bereits bekannten Netzwerk (ohne Passwort-Eingabe)"""
+        # Zeige Verbindungsanzeige
+        connecting_label = QLabel(f"Verbinde mit {ssid}...")
+        connecting_label.setStyleSheet("font-size: 18px; color: #3498db; padding: 20px; text-align: center;")
+        connecting_label.setAlignment(Qt.AlignCenter)
+        connecting_label.setWordWrap(True)
+        self.network_layout.insertWidget(0, connecting_label)
+        self.connecting_label = connecting_label
+        
+        # Aktualisiere UI sofort
+        QApplication.processEvents()
+        
+        def connect():
+            try:
+                logger.info(f"Verbinde mit bekanntem Netzwerk: {ssid}")
+                
+                # Aktiviere die Verbindung direkt (Passwort ist bereits gespeichert)
+                cmd = ['sudo', '-n', 'nmcli', 'connection', 'up', ssid]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                
+                logger.info(f"connection up returncode: {result.returncode}")
+                if result.stdout:
+                    logger.info(f"connection up stdout: {result.stdout[:200]}")
+                if result.stderr:
+                    logger.warning(f"connection up stderr: {result.stderr[:200]}")
+                
+                if result.returncode == 0:
+                    logger.info(f"Erfolgreich verbunden mit {ssid}")
+                    # Stelle sicher, dass Verbindung stabil konfiguriert ist
+                    try:
+                        # Autoconnect aktivieren mit hoher Priorität
+                        subprocess.run(['sudo', '-n', 'nmcli', 'connection', 'modify', ssid, 
+                                      'connection.autoconnect', 'yes',
+                                      'connection.autoconnect-priority', '10'], 
+                                     capture_output=True, text=True, timeout=5)
+                        # Power-Management deaktivieren (verhindert Verbindungsabbrüche)
+                        subprocess.run(['sudo', '-n', 'nmcli', 'connection', 'modify', ssid, 
+                                      'wifi.powersave', '2'], 
+                                     capture_output=True, text=True, timeout=5)
+                        logger.info(f"Verbindung {ssid} stabil konfiguriert (autoconnect=yes, priority=10, powersave=off)")
+                    except Exception as e:
+                        logger.warning(f"Konnte Verbindungs-Einstellungen nicht setzen: {e}")
+                    
+                    # Erfolg über Signal (thread-safe)
+                    self.connection_success.emit()
+                else:
+                    error_msg = result.stderr[:200] if result.stderr else "Unbekannter Fehler"
+                    logger.error(f"Verbindung fehlgeschlagen: {error_msg}")
+                    self.connection_error.emit(f"Verbindung fehlgeschlagen: {error_msg}")
+            except Exception as e:
+                logger.error(f"Fehler beim Verbinden: {e}", exc_info=True)
+                self.connection_error.emit(f"Fehler: {str(e)}")
+        
+        # Starte Verbindung in separatem Thread
+        import threading
+        connect_thread = threading.Thread(target=connect, daemon=True)
+        connect_thread.start()
+    
     def show_system_keyboard(self, input_field):
         """Zeigt die eigene Touch-Tastatur"""
         logger.info("=== Touch-Tastatur wird angezeigt ===")
@@ -1703,9 +1891,10 @@ class WifiSettingsWidget(QWidget):
                                 wifi_device = line.split(':')[0]
                                 break
                     
-                    # Erstelle Verbindung mit expliziten Parametern
+                    # Erstelle Verbindung mit expliziten Parametern für stabile Verbindung
                     # connection.autoconnect=yes sorgt für automatische Verbindung nach Reboot
-                    # connection.autoconnect-priority=0 ist Standard-Priorität
+                    # connection.autoconnect-priority=10 gibt höhere Priorität (wird zuerst verbunden)
+                    # wifi.powersave=2 deaktiviert Power-Management (verhindert Verbindungsabbrüche)
                     cmd = ['sudo', '-n', 'nmcli', 'connection', 'add', 
                            'type', 'wifi',
                            'con-name', self.selected_ssid,
@@ -1713,7 +1902,8 @@ class WifiSettingsWidget(QWidget):
                            'wifi-sec.key-mgmt', 'wpa-psk',
                            'wifi-sec.psk', password,
                            'connection.autoconnect', 'yes',
-                           'connection.autoconnect-priority', '0']
+                           'connection.autoconnect-priority', '10',
+                           'wifi.powersave', '2']
                     
                     if wifi_device:
                         cmd.extend(['ifname', wifi_device])
@@ -1728,6 +1918,15 @@ class WifiSettingsWidget(QWidget):
                         logger.warning(f"connection add stderr: {result.stderr[:200]}")
                     
                     if result.returncode == 0:
+                        # Stelle sicher, dass Verbindung stabil konfiguriert ist
+                        try:
+                            subprocess.run(['sudo', '-n', 'nmcli', 'connection', 'modify', self.selected_ssid, 
+                                          'wifi.powersave', '2',
+                                          'connection.autoconnect-priority', '10'], 
+                                         capture_output=True, text=True, timeout=5)
+                        except Exception as e:
+                            logger.warning(f"Konnte Verbindungs-Einstellungen nicht optimieren: {e}")
+                        
                         # Aktiviere die Verbindung
                         logger.info(f"Aktiviere Verbindung: {self.selected_ssid}")
                         cmd = ['sudo', '-n', 'nmcli', 'connection', 'up', self.selected_ssid]
@@ -1739,8 +1938,20 @@ class WifiSettingsWidget(QWidget):
                         if result.stderr:
                             logger.warning(f"connection up stderr: {result.stderr[:200]}")
                         
-                        # Stelle sicher, dass die Verbindung persistent gespeichert ist
-                        # nmcli connection add speichert automatisch in /etc/NetworkManager/system-connections/
+                        # Stelle sicher, dass die Verbindung stabil konfiguriert ist
+                        try:
+                            # Power-Management deaktivieren (verhindert Verbindungsabbrüche)
+                            subprocess.run(['sudo', '-n', 'nmcli', 'connection', 'modify', self.selected_ssid, 
+                                          'wifi.powersave', '2'], 
+                                         capture_output=True, text=True, timeout=5)
+                            # Priorität erhöhen (wird bevorzugt verbunden)
+                            subprocess.run(['sudo', '-n', 'nmcli', 'connection', 'modify', self.selected_ssid, 
+                                          'connection.autoconnect-priority', '10'], 
+                                         capture_output=True, text=True, timeout=5)
+                            logger.info(f"Verbindung {self.selected_ssid} stabil konfiguriert (powersave=off, priority=10)")
+                        except Exception as e:
+                            logger.warning(f"Konnte Verbindungs-Einstellungen nicht optimieren: {e}")
+                        
                         # Prüfe ob die Verbindung existiert
                         check_cmd = ['nmcli', 'connection', 'show', self.selected_ssid]
                         check_result = subprocess.run(check_cmd, capture_output=True, text=True, timeout=5)
@@ -1761,12 +1972,14 @@ class WifiSettingsWidget(QWidget):
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
                     
                     # Erstelle Verbindung für offenes Netzwerk (ohne Passwort)
+                    # wifi.powersave=2 deaktiviert Power-Management (verhindert Verbindungsabbrüche)
                     cmd = ['sudo', '-n', 'nmcli', 'connection', 'add',
                            'type', 'wifi',
                            'con-name', self.selected_ssid,
                            'ssid', self.selected_ssid,
                            'connection.autoconnect', 'yes',
-                           'connection.autoconnect-priority', '0']
+                           'connection.autoconnect-priority', '10',
+                           'wifi.powersave', '2']
                     
                     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
                     
@@ -3186,11 +3399,21 @@ class MainWindow(QMainWindow):
             # Stelle sicher, dass das Fenster angezeigt wurde
             QApplication.processEvents()
             
+            # Prüfe Bildanzahl - wenn 0, aktualisiere die Liste nochmal (falls Bilder hinzugefügt wurden)
+            image_count = self.slideshow_widget.slideshow.get_image_count()
+            if image_count == 0:
+                logger.info("Keine Bilder beim Start, aktualisiere Slideshow-Liste...")
+                self.slideshow_widget.slideshow._refresh_image_list()
+                image_count = self.slideshow_widget.slideshow.get_image_count()
+            
             # Lade erstes Bild ASYNCHRON (nicht blockierend)
-            if self.slideshow_widget.slideshow.get_image_count() > 0:
+            if image_count > 0:
+                logger.info(f"Lade erstes Bild von {image_count} verfügbaren Bildern")
                 # Verwende QTimer, um das Bild-Laden im Hintergrund zu starten
                 # Das verhindert Blockierung der GUI
                 QTimer.singleShot(50, lambda: self.slideshow_widget.load_current_image(use_fade=False))
+            else:
+                logger.info("Keine Bilder vorhanden beim Start")
             
             logger.info("Slideshow initialisiert")
         except Exception as e:
@@ -3203,6 +3426,21 @@ class MainWindow(QMainWindow):
         self.setup_file_watcher()
         self.apply_dpms_settings()  # DPMS-Einstellungen beim Start anwenden
         self.setup_display_schedule()  # Zeitgesteuerte Ein/Ausschaltung einrichten
+        
+        # Prüfe ob Bilder vorhanden sind und Slideshow aktualisieren falls nötig
+        # Das ist wichtig, falls Bilder hinzugefügt wurden während die Anwendung bereits lief
+        if hasattr(self, 'slideshow_widget') and self.slideshow_widget:
+            image_count = self.slideshow_widget.slideshow.get_image_count()
+            if image_count == 0:
+                # Keine Bilder beim Start - prüfe ob jetzt welche vorhanden sind
+                logger.info("Keine Bilder beim Start erkannt, prüfe erneut...")
+                self.slideshow_widget.slideshow._refresh_image_list()
+                new_count = self.slideshow_widget.slideshow.get_image_count()
+                if new_count > 0:
+                    logger.info(f"Bilder gefunden nach verzögerter Initialisierung: {new_count} Bilder")
+                    # Lade erstes Bild
+                    QTimer.singleShot(100, lambda: self.slideshow_widget.load_current_image(use_fade=False))
+        
         logger.info("Verzögerte Initialisierungen abgeschlossen")
     
     def setup_ui(self):
@@ -3654,10 +3892,13 @@ class MainWindow(QMainWindow):
         """Richtet den File-Watcher für automatische Bilderkennung ein"""
         try:
             proxy_dir = Path(self.config.get('paths.proxy_images'))
+            # Übergebe das refresh_requested Signal für thread-sichere Kommunikation
+            refresh_signal = self.slideshow_widget.refresh_requested if self.slideshow_widget else None
             self.file_watcher = FileWatcher(
                 proxy_dir=proxy_dir,
                 slideshow=self.slideshow,
-                slideshow_widget=self.slideshow_widget
+                slideshow_widget=self.slideshow_widget,
+                refresh_signal=refresh_signal
             )
             self.file_watcher.start()
             logger.info("File-Watcher für automatische Bilderkennung gestartet")

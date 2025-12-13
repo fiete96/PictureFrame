@@ -38,6 +38,7 @@ class ImageProcessor:
                 return proxy_path
             
             # Bild öffnen und verarbeiten
+            # Verwende explizite Speicherfreigabe durch geschachtelte with-Blöcke
             with Image.open(source_path) as img:
                 # EXIF-Orientierung korrigieren
                 img = self._fix_orientation(img)
@@ -49,10 +50,15 @@ class ImageProcessor:
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
                 
-                # Proxy-Bild speichern
+                # Proxy-Bild speichern (in separatem Block für explizite Speicherfreigabe)
                 img.save(proxy_path, 'JPEG', quality=self.quality, optimize=True)
                 logger.info(f"Proxy-Bild erstellt: {proxy_path}")
-                return proxy_path
+            
+            # Explizite Speicherfreigabe (PIL sollte dies automatisch tun, aber sicherstellen)
+            import gc
+            gc.collect()
+            
+            return proxy_path
                 
         except Exception as e:
             logger.error(f"Fehler beim Verarbeiten von {source_path}: {e}")

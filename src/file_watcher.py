@@ -6,44 +6,53 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from pathlib import Path
 import logging
-from PyQt5.QtCore import QTimer
+import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 class ImageFileHandler(FileSystemEventHandler):
     """Handler für Datei-Ereignisse im Proxy-Verzeichnis"""
     
-    def __init__(self, slideshow, slideshow_widget=None):
+    def __init__(self, slideshow, slideshow_widget=None, refresh_signal=None):
         self.slideshow = slideshow
         self.slideshow_widget = slideshow_widget
         self.proxy_dir = slideshow.proxy_dir
-        # QTimer für Debouncing (thread-sicher)
-        self._refresh_timer = QTimer()
-        self._refresh_timer.setSingleShot(True)
-        self._refresh_timer.setInterval(3000)  # 3 Sekunden Debounce für Bulk-Uploads
-        self._refresh_timer.timeout.connect(self._perform_refresh)
+        self.refresh_signal = refresh_signal  # PyQt5 Signal für thread-sichere Kommunikation
+        # Thread-sicherer Debounce-Timer (verwendet threading.Timer statt QTimer)
+        self._refresh_timer = None
+        self._refresh_lock = threading.Lock()
+        self._last_refresh_time = 0
+        self._debounce_interval = 5.0  # 5 Sekunden Debounce (erhöht für Bulk-Uploads)
     
     def _perform_refresh(self):
-        """Führt den eigentlichen Slideshow-Refresh aus"""
-        try:
-            logger.info("Slideshow-Refresh durch File-Watcher ausgelöst (nach Debounce)")
-            self.slideshow.refresh()
-            if self.slideshow_widget:
-                try:
-                    if hasattr(self.slideshow_widget, 'safe_refresh'):
-                        self.slideshow_widget.safe_refresh()
-                    else:
-                        self.slideshow_widget.refresh()
-                except Exception as e:
-                    logger.error(f"Fehler beim Aktualisieren der Slideshow: {e}")
-        except Exception as e:
-            logger.error(f"Fehler beim Slideshow-Refresh: {e}", exc_info=True)
+        """Führt den eigentlichen Slideshow-Refresh aus (wird im Haupt-Thread aufgerufen)"""
+        # Diese Methode wird nicht mehr verwendet, da wir direkt das Signal emittieren
+        # Behalten für Fallback-Fall
+        pass
     
     def _trigger_refresh(self):
-        """Startet oder setzt den Refresh-Timer zurück"""
-        if self._refresh_timer.isActive():
-            self._refresh_timer.stop()
-        self._refresh_timer.start()
+        """Startet oder setzt den Refresh-Timer zurück (thread-sicher)"""
+        with self._refresh_lock:
+            current_time = time.time()
+            # Wenn letzter Refresh zu kurz her ist, Timer zurücksetzen
+            if self._refresh_timer:
+                self._refresh_timer.cancel()
+            
+            # Neuen Timer starten
+            self._refresh_timer = threading.Timer(self._debounce_interval, self._schedule_refresh)
+            self._refresh_timer.daemon = True
+            self._refresh_timer.start()
+    
+    def _schedule_refresh(self):
+        """Plant den Refresh im Haupt-Thread über Signal"""
+        if self.refresh_signal:
+            # Emittiere Signal (wird im Haupt-Thread verarbeitet)
+            self.refresh_signal.emit()
+        else:
+            # Fallback: Direkter Aufruf (nicht thread-sicher, aber besser als nichts)
+            logger.warning("Kein Refresh-Signal verfügbar, verwende direkten Aufruf")
+            self._perform_refresh()
     
     def on_created(self, event):
         """Wird aufgerufen, wenn eine neue Datei erstellt wird"""
@@ -108,10 +117,11 @@ class ImageFileHandler(FileSystemEventHandler):
 class FileWatcher:
     """Überwacht das Proxy-Verzeichnis auf neue Bilder"""
     
-    def __init__(self, proxy_dir: Path, slideshow, slideshow_widget=None):
+    def __init__(self, proxy_dir: Path, slideshow, slideshow_widget=None, refresh_signal=None):
         self.proxy_dir = Path(proxy_dir)
         self.slideshow = slideshow
         self.slideshow_widget = slideshow_widget
+        self.refresh_signal = refresh_signal  # PyQt5 Signal für thread-sichere Kommunikation
         self.observer = None
     
     def start(self):
@@ -119,7 +129,11 @@ class FileWatcher:
         if not self.proxy_dir.exists():
             self.proxy_dir.mkdir(parents=True, exist_ok=True)
         
-        event_handler = ImageFileHandler(self.slideshow, self.slideshow_widget)
+        event_handler = ImageFileHandler(
+            self.slideshow, 
+            self.slideshow_widget,
+            refresh_signal=self.refresh_signal
+        )
         self.observer = Observer()
         self.observer.schedule(event_handler, str(self.proxy_dir), recursive=False)
         self.observer.start()

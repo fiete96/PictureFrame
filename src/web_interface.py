@@ -2,7 +2,7 @@
 Webinterface für Picture Frame
 Ermöglicht Remote-Verwaltung über Browser
 """
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, send_from_directory, Response
 from pathlib import Path
 import logging
 import shutil
@@ -13,11 +13,15 @@ from datetime import datetime
 from functools import lru_cache
 from PIL import Image
 import io
+import zipfile
+import subprocess
 
 from config_manager import ConfigManager
 from image_processor import ImageProcessor
 from exif_extractor import ExifExtractor
 from playlist_manager import PlaylistManager
+import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +45,118 @@ class WebInterface:
         self.thumbnail_dir = Path(self.config.get('paths.proxy_images')) / 'thumbnails'
         self.thumbnail_dir.mkdir(exist_ok=True)
         
+        # Upload-Queue für verzögerte Verarbeitung
+        self._upload_queue = []
+        self._upload_queue_lock = threading.Lock()
+        self._processing_timer = None
+        self._processing_delay = 5.0  # 5 Sekunden warten nach letztem Upload
+        
         self.setup_routes()
+    
+    def _schedule_processing(self):
+        """Plant die Verarbeitung der Upload-Queue (nach Verzögerung)"""
+        # Stoppe alten Timer falls vorhanden
+        if self._processing_timer:
+            self._processing_timer.cancel()
+        
+        # Starte neuen Timer (warte auf weitere Uploads)
+        self._processing_timer = threading.Timer(self._processing_delay, self._process_upload_queue)
+        self._processing_timer.daemon = True
+        self._processing_timer.start()
+    
+    def _process_upload_queue(self):
+        """Verarbeitet alle Bilder in der Upload-Queue nacheinander"""
+        with self._upload_queue_lock:
+            if not self._upload_queue:
+                return
+            
+            # Kopiere Queue und leere sie
+            queue_copy = self._upload_queue.copy()
+            self._upload_queue.clear()
+            queue_size = len(queue_copy)
+        
+        logger.info(f"Starte Verarbeitung von {queue_size} Bildern aus der Queue...")
+        
+        proxy_dir = Path(self.config.get('paths.proxy_images'))
+        metadata_file = proxy_dir / 'metadata.json'
+        
+        # Lade Metadaten einmal (wird für alle Bilder verwendet)
+        metadata = {}
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            except Exception as e:
+                logger.error(f"Fehler beim Laden der Metadaten: {e}")
+                metadata = {}
+        
+        # Verarbeite jedes Bild nacheinander (nicht parallel!)
+        for item in queue_copy:
+            try:
+                original_path = item['original_path']
+                uploader_name = item['uploader_name']
+                
+                logger.info(f"Verarbeite Bild: {original_path.name}")
+                
+                # Proxy erstellen
+                proxy_path = self.image_processor.process_image(original_path, proxy_dir)
+                
+                # EXIF-Daten extrahieren
+                exif_data = ExifExtractor.extract_all_exif(original_path)
+                
+                # Metadaten aktualisieren
+                image_hash = proxy_path.stem
+                metadata[image_hash] = {
+                    'sender': uploader_name,
+                    'subject': '',
+                    'date': exif_data.get('date') or datetime.now().isoformat(),
+                    'location': exif_data.get('location'),
+                    'latitude': exif_data.get('latitude'),
+                    'longitude': exif_data.get('longitude'),
+                    'exif_data': exif_data
+                }
+                
+                # Speicherfreigabe nach jedem Bild
+                import gc
+                gc.collect()
+                
+            except Exception as e:
+                logger.error(f"Fehler beim Verarbeiten von {original_path}: {e}", exc_info=True)
+                continue
+        
+        # Speichere Metadaten einmal für alle Bilder
+        try:
+            metadata_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            logger.info(f"Metadaten gespeichert für {queue_size} Bilder")
+        except Exception as e:
+            logger.error(f"Fehler beim Speichern der Metadaten: {e}", exc_info=True)
+        
+        # Playlists aktualisieren (einmal für alle neuen Bilder)
+        try:
+            playlist_manager = PlaylistManager(proxy_dir, metadata_file)
+            for item in queue_copy:
+                try:
+                    original_path = item['original_path']
+                    # Hash aus Proxy-Datei ermitteln
+                    file_hash = self.image_processor._get_file_hash(original_path)
+                    playlist_manager.add_image(file_hash)
+                except Exception as e:
+                    logger.warning(f"Fehler beim Hinzufügen zu Playlist: {e}")
+            logger.info(f"Playlists aktualisiert für {queue_size} Bilder")
+        except Exception as e:
+            logger.warning(f"Fehler beim Aktualisieren der Playlists: {e}")
+        
+        # Cache invalidieren
+        self._images_cache = None
+        self._images_cache_time = None
+        
+        # Finale Speicherfreigabe
+        import gc
+        gc.collect()
+        
+        logger.info(f"Verarbeitung abgeschlossen: {queue_size} Bilder verarbeitet")
     
     def setup_routes(self):
         """Richtet alle Web-Routen ein"""
@@ -294,6 +409,159 @@ class WebInterface:
                 logger.error(f"Fehler beim Löschen: {e}", exc_info=True)
                 return jsonify({'success': False, 'error': str(e)}), 500
         
+        @self.app.route('/api/images/bulk-delete', methods=['POST'])
+        def bulk_delete_images():
+            """Löscht mehrere Bilder auf einmal"""
+            try:
+                data = request.get_json()
+                if not data or 'filenames' not in data:
+                    return jsonify({'success': False, 'error': 'Keine Dateinamen übergeben'}), 400
+                
+                filenames = data['filenames']
+                if not isinstance(filenames, list) or len(filenames) == 0:
+                    return jsonify({'success': False, 'error': 'Ungültige Dateinamen-Liste'}), 400
+                
+                proxy_dir = Path(self.config.get('paths.proxy_images'))
+                original_dir = Path(self.config.get('paths.original_images'))
+                metadata_file = proxy_dir / 'metadata.json'
+                
+                deleted_count = 0
+                errors = []
+                
+                for filename in filenames:
+                    try:
+                        proxy_file = proxy_dir / secure_filename(filename)
+                        if not proxy_file.exists():
+                            errors.append(f"{filename}: Nicht gefunden")
+                            continue
+                        
+                        proxy_hash = proxy_file.stem
+                        
+                        # Proxy-Datei löschen
+                        proxy_file.unlink()
+                        logger.info(f"Proxy-Datei gelöscht: {proxy_file.name}")
+                        
+                        # Original-Datei finden und löschen
+                        original_found = False
+                        for orig_file in original_dir.rglob("*"):
+                            if orig_file.is_file():
+                                try:
+                                    orig_hash = self.image_processor._get_file_hash(orig_file)
+                                    if orig_hash == proxy_hash:
+                                        orig_file.unlink()
+                                        logger.info(f"Original-Datei gelöscht: {orig_file.name}")
+                                        original_found = True
+                                        break
+                                except Exception:
+                                    continue
+                        
+                        # Metadaten löschen
+                        if metadata_file.exists():
+                            try:
+                                with open(metadata_file, 'r', encoding='utf-8') as f:
+                                    metadata = json.load(f)
+                                if proxy_hash in metadata:
+                                    del metadata[proxy_hash]
+                                    with open(metadata_file, 'w', encoding='utf-8') as f:
+                                        json.dump(metadata, f, indent=2, ensure_ascii=False)
+                            except Exception as e:
+                                logger.warning(f"Fehler beim Löschen der Metadaten: {e}")
+                        
+                        # Playlists aktualisieren
+                        try:
+                            playlist_manager = PlaylistManager(proxy_dir, metadata_file)
+                            playlist_manager.remove_image(proxy_hash)
+                        except Exception as e:
+                            logger.warning(f"Fehler beim Aktualisieren der Playlists: {e}")
+                        
+                        # Thumbnail löschen
+                        thumbnail_path = self.thumbnail_dir / secure_filename(filename)
+                        if thumbnail_path.exists():
+                            try:
+                                thumbnail_path.unlink()
+                            except Exception:
+                                pass
+                        
+                        deleted_count += 1
+                    except Exception as e:
+                        logger.error(f"Fehler beim Löschen von {filename}: {e}", exc_info=True)
+                        errors.append(f"{filename}: {str(e)}")
+                
+                # Cache invalidieren
+                self._images_cache = None
+                self._images_cache_time = None
+                
+                return jsonify({
+                    'success': True,
+                    'deleted_count': deleted_count,
+                    'total_requested': len(filenames),
+                    'errors': errors if errors else None
+                })
+            except Exception as e:
+                logger.error(f"Fehler beim Bulk-Löschen: {e}", exc_info=True)
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/images/bulk-download', methods=['POST'])
+        def bulk_download_images():
+            """Erstellt ein ZIP-Archiv mit mehreren Bildern"""
+            try:
+                data = request.get_json()
+                if not data or 'filenames' not in data:
+                    return jsonify({'success': False, 'error': 'Keine Dateinamen übergeben'}), 400
+                
+                filenames = data['filenames']
+                if not isinstance(filenames, list) or len(filenames) == 0:
+                    return jsonify({'success': False, 'error': 'Ungültige Dateinamen-Liste'}), 400
+                
+                proxy_dir = Path(self.config.get('paths.proxy_images'))
+                original_dir = Path(self.config.get('paths.original_images'))
+                
+                # Erstelle temporäres ZIP-Archiv im Speicher
+                zip_buffer = io.BytesIO()
+                
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    for filename in filenames:
+                        try:
+                            proxy_file = proxy_dir / secure_filename(filename)
+                            if not proxy_file.exists():
+                                continue
+                            
+                            proxy_hash = proxy_file.stem
+                            
+                            # Finde Original-Datei
+                            original_file = None
+                            for orig_file in original_dir.rglob("*"):
+                                if orig_file.is_file():
+                                    try:
+                                        orig_hash = self.image_processor._get_file_hash(orig_file)
+                                        if orig_hash == proxy_hash:
+                                            original_file = orig_file
+                                            break
+                                    except Exception:
+                                        continue
+                            
+                            # Füge Original-Datei zum ZIP hinzu (falls gefunden)
+                            if original_file and original_file.exists():
+                                zip_file.write(original_file, original_file.name)
+                            else:
+                                # Fallback: Proxy-Datei verwenden
+                                zip_file.write(proxy_file, proxy_file.name)
+                        except Exception as e:
+                            logger.warning(f"Fehler beim Hinzufügen von {filename} zum ZIP: {e}")
+                            continue
+                
+                zip_buffer.seek(0)
+                
+                return send_file(
+                    zip_buffer,
+                    mimetype='application/zip',
+                    as_attachment=True,
+                    download_name=f'bilder_{datetime.now().strftime("%Y%m%d_%H%M%S")}.zip'
+                )
+            except Exception as e:
+                logger.error(f"Fehler beim Erstellen des ZIP-Archivs: {e}", exc_info=True)
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
         @self.app.route('/api/images/<filename>/download')
         def download_original(filename):
             """Lädt die Original-Datei herunter"""
@@ -333,107 +601,83 @@ class WebInterface:
         
         @self.app.route('/api/upload', methods=['POST'])
         def upload_image():
-            """Lädt ein Bild hoch"""
-            if 'file' not in request.files:
-                return jsonify({'success': False, 'error': 'Keine Datei'}), 400
-            
-            file = request.files['file']
-            if file.filename == '':
-                return jsonify({'success': False, 'error': 'Keine Datei ausgewählt'}), 400
-            
-            if file and self.image_processor.is_supported(Path(file.filename)):
-                try:
-                    # Original speichern
-                    original_dir = Path(self.config.get('paths.original_images'))
-                    filename = secure_filename(file.filename)
-                    original_path = original_dir / filename
-                    
-                    # Falls Datei existiert, Nummer anhängen
-                    counter = 1
-                    while original_path.exists():
-                        stem = Path(filename).stem
-                        suffix = Path(filename).suffix
-                        original_path = original_dir / f"{stem}_{counter}{suffix}"
-                        counter += 1
-                    
-                    file.save(str(original_path))
-                    
-                    # Proxy erstellen
-                    proxy_dir = Path(self.config.get('paths.proxy_images'))
-                    proxy_path = self.image_processor.process_image(original_path, proxy_dir)
-                    
-                    # EXIF-Daten extrahieren und speichern
-                    exif_data = ExifExtractor.extract_all_exif(original_path)
-                    
-                    # Metadaten speichern (Manueller Upload)
-                    metadata_file = proxy_dir / 'metadata.json'
-                    metadata = {}
-                    if metadata_file.exists():
-                        try:
-                            with open(metadata_file, 'r', encoding='utf-8') as f:
-                                metadata = json.load(f)
-                        except:
-                            metadata = {}
-                    
-                    # Name aus POST-Request holen (falls vorhanden)
-                    uploader_name = request.form.get('name', 'Manueller Upload')
-                    if not uploader_name or uploader_name.strip() == '':
-                        uploader_name = 'Manueller Upload'
-                    
-                    image_hash = proxy_path.stem
-                    # Metadaten speichern - nur einmal, ohne Duplikation
-                    # Die Top-Level-Felder werden aus exif_data übernommen für schnellen Zugriff
-                    metadata[image_hash] = {
-                        'sender': uploader_name.strip(),
-                        'subject': '',
-                        'date': exif_data.get('date') or datetime.now().isoformat(),  # EXIF-Datum oder aktuelles Datum
-                        'location': exif_data.get('location'),  # Stadt (Land) - für schnellen Zugriff
-                        'latitude': exif_data.get('latitude'),  # Für schnellen Zugriff
-                        'longitude': exif_data.get('longitude'),  # Für schnellen Zugriff
-                        'exif_data': exif_data  # Vollständige EXIF-Daten für Sortierung und zukünftige Erweiterungen
-                    }
-                    # Hinweis: Die Top-Level-Felder (date, location, latitude, longitude) sind Duplikate von exif_data
-                    # für schnellen Zugriff ohne in exif_data zu graben. exif_data enthält die vollständigen EXIF-Daten.
-                    
-                    metadata_file.parent.mkdir(parents=True, exist_ok=True)
-                    with open(metadata_file, 'w', encoding='utf-8') as f:
-                        json.dump(metadata, f, indent=2, ensure_ascii=False)
-                    
-                    # Playlists aktualisieren (optimiert für Bulk-Uploads)
-                    # Nur zu transfer_time Playlist hinzufügen (schnell)
-                    # Andere Playlists werden beim nächsten Slideshow-Refresh neu aufgebaut
-                    try:
-                        playlist_manager = PlaylistManager(proxy_dir, metadata_file)
-                        playlist_manager._add_to_playlist(image_hash, "transfer_time")
-                    except Exception as e:
-                        logger.warning(f"Fehler beim Aktualisieren der Playlists: {e}")
-                    
-                    # Cache invalidieren nach Upload
-                    self._images_cache = None
-                    self._images_cache_time = None
-                    
-                    # Thumbnail für neues Bild generieren
-                    try:
-                        thumbnail_path = self.thumbnail_dir / proxy_path.name
-                        if not thumbnail_path.exists():
-                            with Image.open(proxy_path) as img:
-                                img.thumbnail((300, 300), Image.Resampling.LANCZOS)
-                                thumb_io = io.BytesIO()
-                                img.save(thumb_io, format='JPEG', quality=75, optimize=True)
-                                thumb_io.seek(0)
-                                thumbnail_path.parent.mkdir(exist_ok=True)
-                                with open(thumbnail_path, 'wb') as f:
-                                    f.write(thumb_io.getvalue())
-                    except Exception:
-                        # Thumbnail konnte nicht generiert werden
-                        pass
-                    
-                    return jsonify({'success': True, 'message': 'Bild erfolgreich hochgeladen'})
-                except Exception as e:
-                    logger.error(f"Fehler beim Hochladen: {e}")
-                    return jsonify({'success': False, 'error': str(e)}), 500
-            
-            return jsonify({'success': False, 'error': 'Ungültiges Dateiformat'}), 400
+            """Lädt ein Bild hoch (schnelle Antwort für iOS-Kompatibilität)"""
+            try:
+                if 'file' not in request.files:
+                    logger.warning("Upload-Anfrage ohne Datei")
+                    return jsonify({'success': False, 'error': 'Keine Datei'}), 400
+                
+                file = request.files['file']
+                if file.filename == '':
+                    logger.warning("Upload-Anfrage mit leerem Dateinamen")
+                    return jsonify({'success': False, 'error': 'Keine Datei ausgewählt'}), 400
+                
+                # Prüfe Dateigröße vor dem Speichern (iOS-Kompatibilität)
+                file.seek(0, 2)  # Zum Ende springen
+                file_size = file.tell()
+                file.seek(0)  # Zurück zum Anfang
+                
+                max_size = 16 * 1024 * 1024  # 16MB
+                if file_size > max_size:
+                    logger.warning(f"Datei zu groß: {file_size} bytes (max: {max_size})")
+                    return jsonify({'success': False, 'error': f'Datei zu groß ({file_size // 1024 // 1024}MB, max 16MB)'}), 413
+                
+                if not self.image_processor.is_supported(Path(file.filename)):
+                    logger.warning(f"Dateiformat nicht unterstützt: {file.filename}")
+                    return jsonify({'success': False, 'error': 'Dateiformat nicht unterstützt'}), 400
+                
+                # Original speichern (schnell, ohne Verarbeitung)
+                original_dir = Path(self.config.get('paths.original_images'))
+                original_dir.mkdir(parents=True, exist_ok=True)  # Stelle sicher, dass Verzeichnis existiert
+                
+                filename = secure_filename(file.filename)
+                original_path = original_dir / filename
+                
+                # Falls Datei existiert, Nummer anhängen
+                counter = 1
+                while original_path.exists():
+                    stem = Path(filename).stem
+                    suffix = Path(filename).suffix
+                    original_path = original_dir / f"{stem}_{counter}{suffix}"
+                    counter += 1
+                
+                # Speichere Datei (schnell)
+                logger.info(f"Speichere Upload: {original_path.name} ({file_size // 1024}KB)")
+                file.save(str(original_path))
+                
+                # Verifiziere, dass Datei gespeichert wurde
+                if not original_path.exists():
+                    logger.error(f"Datei konnte nicht gespeichert werden: {original_path}")
+                    return jsonify({'success': False, 'error': 'Fehler beim Speichern'}), 500
+                
+                # Name aus POST-Request holen (falls vorhanden)
+                uploader_name = request.form.get('name', 'Manueller Upload')
+                if not uploader_name or uploader_name.strip() == '':
+                    uploader_name = 'Manueller Upload'
+                
+                # Zur Verarbeitungs-Queue hinzufügen (verzögerte Verarbeitung)
+                with self._upload_queue_lock:
+                    self._upload_queue.append({
+                        'original_path': original_path,
+                        'uploader_name': uploader_name.strip()
+                    })
+                    queue_size = len(self._upload_queue)
+                    logger.info(f"Bild zur Verarbeitungs-Queue hinzugefügt: {original_path.name} (Queue-Größe: {queue_size})")
+                
+                # Timer zurücksetzen (warte auf weitere Uploads)
+                self._schedule_processing()
+                
+                # Sofortige Antwort (wichtig für iOS-Kompatibilität)
+                return jsonify({
+                    'success': True, 
+                    'message': 'Bild erfolgreich hochgeladen',
+                    'filename': original_path.name,
+                    'size': file_size
+                }), 200
+                
+            except Exception as e:
+                logger.error(f"Fehler beim Upload: {e}", exc_info=True)
+                return jsonify({'success': False, 'error': f'Upload-Fehler: {str(e)}'}), 500
         
         @self.app.route('/api/config')
         def get_config():
@@ -520,17 +764,203 @@ class WebInterface:
         @self.app.route('/api/system/info')
         def system_info():
             """Gibt Systeminformationen zurück"""
+            import shutil
+            import os
+            
             proxy_dir = Path(self.config.get('paths.proxy_images'))
             original_dir = Path(self.config.get('paths.original_images'))
             
+            # Zähle Bilder
             proxy_count = len(list(proxy_dir.glob("*.jpg"))) if proxy_dir.exists() else 0
-            original_count = len([f for f in original_dir.rglob("*") if f.is_file()]) if original_dir.exists() else 0
+            original_files = [f for f in original_dir.rglob("*") if f.is_file() and self.image_processor.is_supported(f)] if original_dir.exists() else []
+            original_count = len(original_files)
+            
+            # Berechne Duplikate (Bilder mit gleichem Hash)
+            hash_counts = {}
+            for orig_file in original_files:
+                try:
+                    file_hash = self.image_processor._get_file_hash(orig_file)
+                    hash_counts[file_hash] = hash_counts.get(file_hash, 0) + 1
+                except Exception as e:
+                    logger.warning(f"Fehler beim Berechnen des Hashs für {orig_file}: {e}")
+                    continue
+            
+            # Zähle Duplikate (Bilder, die mehr als einmal vorkommen)
+            duplicates = sum(count - 1 for count in hash_counts.values() if count > 1)
+            unique_images = len(hash_counts)
+            
+            # Berechne Speicherbedarf
+            def get_dir_size(path):
+                """Berechnet die Größe eines Verzeichnisses in Bytes"""
+                total = 0
+                try:
+                    for entry in path.rglob('*'):
+                        if entry.is_file():
+                            total += entry.stat().st_size
+                except Exception as e:
+                    logger.warning(f"Fehler beim Berechnen der Verzeichnisgröße: {e}")
+                return total
+            
+            original_size = get_dir_size(original_dir) if original_dir.exists() else 0
+            proxy_size = get_dir_size(proxy_dir) if proxy_dir.exists() else 0
+            total_size = original_size + proxy_size
+            
+            # Berechne Speicherkapazität (verwende das Verzeichnis, in dem die Bilder gespeichert sind)
+            try:
+                # Finde das Root-Verzeichnis (normalerweise das Parent von original_dir)
+                root_path = original_dir.parent if original_dir.exists() else Path('.')
+                stat = shutil.disk_usage(root_path)
+                total_disk = stat.total
+                used_disk = stat.used
+                free_disk = stat.free
+            except Exception as e:
+                logger.warning(f"Fehler beim Ermitteln der Speicherkapazität: {e}")
+                total_disk = 0
+                used_disk = 0
+                free_disk = 0
+            
+            # Formatierung für Anzeige
+            def format_bytes(bytes_val):
+                """Formatiert Bytes in lesbare Einheit"""
+                for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+                    if bytes_val < 1024.0:
+                        return f"{bytes_val:.2f} {unit}"
+                    bytes_val /= 1024.0
+                return f"{bytes_val:.2f} PB"
             
             return jsonify({
                 'proxy_images': proxy_count,
                 'original_images': original_count,
+                'unique_images': unique_images,
+                'duplicates': duplicates,
+                'storage': {
+                    'original_size': original_size,
+                    'proxy_size': proxy_size,
+                    'total_size': total_size,
+                    'original_size_formatted': format_bytes(original_size),
+                    'proxy_size_formatted': format_bytes(proxy_size),
+                    'total_size_formatted': format_bytes(total_size),
+                    'disk_total': total_disk,
+                    'disk_used': used_disk,
+                    'disk_free': free_disk,
+                    'disk_total_formatted': format_bytes(total_disk),
+                    'disk_used_formatted': format_bytes(used_disk),
+                    'disk_free_formatted': format_bytes(free_disk),
+                    'disk_usage_percent': round((used_disk / total_disk * 100) if total_disk > 0 else 0, 1)
+                },
                 'config': self.config.get_all()
             })
+        
+        @self.app.route('/api/system/update', methods=['POST'])
+        def system_update():
+            """Führt ein Update des Systems durch (Git Pull + Service Restart)"""
+            try:
+                # Finde das Projekt-Verzeichnis (normalerweise Parent von src)
+                project_dir = Path(__file__).parent.parent
+                
+                update_log = []
+                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Update gestartet...")
+                
+                # Prüfe ob Git installiert ist
+                try:
+                    subprocess.run(['git', '--version'], capture_output=True, check=True, timeout=5)
+                except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                    return jsonify({
+                        'success': False,
+                        'error': 'Git ist nicht installiert oder nicht verfügbar',
+                        'logs': update_log
+                    }), 500
+                
+                # Prüfe ob es ein Git-Repository ist
+                git_dir = project_dir / '.git'
+                if not git_dir.exists():
+                    return jsonify({
+                        'success': False,
+                        'error': 'Kein Git-Repository gefunden',
+                        'logs': update_log
+                    }), 500
+                
+                # Führe Git Pull aus
+                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Führe 'git pull' aus...")
+                try:
+                    result = subprocess.run(
+                        ['git', 'pull'],
+                        cwd=str(project_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=60
+                    )
+                    
+                    if result.stdout:
+                        update_log.append(f"Git Output:\n{result.stdout}")
+                    if result.stderr:
+                        update_log.append(f"Git Warnings:\n{result.stderr}")
+                    
+                    if result.returncode != 0:
+                        update_log.append(f"Git Pull fehlgeschlagen mit Code {result.returncode}")
+                        return jsonify({
+                            'success': False,
+                            'error': f'Git Pull fehlgeschlagen: {result.stderr}',
+                            'logs': update_log
+                        }), 500
+                    
+                    update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Git Pull erfolgreich")
+                    
+                except subprocess.TimeoutExpired:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Git Pull Timeout (länger als 60 Sekunden)',
+                        'logs': update_log
+                    }), 500
+                except Exception as e:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Fehler beim Git Pull: {str(e)}',
+                        'logs': update_log
+                    }), 500
+                
+                # Prüfe ob Änderungen vorhanden waren
+                has_changes = 'Already up to date' not in result.stdout
+                
+                if has_changes:
+                    update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Änderungen gefunden, starte Service neu...")
+                    
+                    # Starte Service neu
+                    try:
+                        restart_result = subprocess.run(
+                            ['sudo', 'systemctl', 'restart', 'pictureframe'],
+                            capture_output=True,
+                            text=True,
+                            timeout=30
+                        )
+                        
+                        if restart_result.returncode == 0:
+                            update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service erfolgreich neu gestartet")
+                        else:
+                            update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service-Restart Warnung: {restart_result.stderr}")
+                            
+                    except subprocess.TimeoutExpired:
+                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service-Restart Timeout")
+                    except Exception as e:
+                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service-Restart Fehler: {str(e)}")
+                else:
+                    update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Keine Änderungen - bereits auf dem neuesten Stand")
+                
+                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Update abgeschlossen")
+                
+                return jsonify({
+                    'success': True,
+                    'has_changes': has_changes,
+                    'logs': update_log
+                })
+                
+            except Exception as e:
+                logger.error(f"Fehler beim Update: {e}", exc_info=True)
+                return jsonify({
+                    'success': False,
+                    'error': str(e),
+                    'logs': update_log if 'update_log' in locals() else []
+                }), 500
         
         @self.app.route('/api/email/test', methods=['POST'])
         def test_email():

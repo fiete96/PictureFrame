@@ -107,15 +107,57 @@
         
         .image-item {
             position: relative;
+        }
+        
+        .image-item {
+            cursor: pointer;
+            transition: transform 0.3s, box-shadow 0.3s, outline 0.2s;
+        }
+        
+        .image-item.selected {
+            outline: 4px solid #3498db;
+            outline-offset: -4px;
+            box-shadow: 0 8px 25px rgba(52, 152, 219, 0.5);
+        }
+        
+        .image-item.selected::before {
+            content: '✓';
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 30px;
+            height: 30px;
+            background: #3498db;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: bold;
+            z-index: 10;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .spinner {
+            animation: spin 1s linear infinite;
+        }
+        
+        .image-item {
+            position: relative;
             border-radius: 15px;
-            overflow: hidden;
+            overflow: visible;
             box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            transition: transform 0.3s, box-shadow 0.3s;
             background: #34495e;
             border: 2px solid #2c3e50;
         }
         
-        .image-item:hover {
+        .image-item:not(.selected):hover {
             transform: scale(1.05);
             box-shadow: 0 8px 25px rgba(0,0,0,0.5);
         }
@@ -282,6 +324,31 @@
             <h2>Bildverwaltung</h2>
             <div class="info-box">
                 <strong>Hinweis:</strong> Gelöschte Bilder können nicht wiederhergestellt werden.
+            </div>
+            <div style="margin: 20px 0; display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #ecf0f1;">
+                    <input type="checkbox" id="select-all" onchange="toggleSelectAll()" style="width: 20px; height: 20px; cursor: pointer;">
+                    <strong>Alle auswählen</strong>
+                </label>
+                <span id="selected-count" style="color: #bdc3c7; margin-left: 10px;">0 ausgewählt</span>
+                <div style="margin-left: auto; display: flex; gap: 10px;">
+                    <button class="btn" onclick="downloadSelected()" id="download-selected-btn" disabled style="background: #3498db;">
+                        Ausgewählte herunterladen
+                    </button>
+                    <button class="btn" onclick="deleteSelected()" id="delete-selected-btn" disabled style="background: #e74c3c;">
+                        Ausgewählte löschen
+                    </button>
+                </div>
+            </div>
+            <div id="download-progress" style="display: none; margin: 20px 0; padding: 15px; background: #34495e; border-radius: 8px; border: 2px solid #3498db;">
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
+                    <div class="spinner" style="width: 20px; height: 20px; border: 3px solid #2c3e50; border-top: 3px solid #3498db; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                    <strong style="color: #ecf0f1;" id="download-status">Bereite Download vor...</strong>
+                </div>
+                <div style="background: #2c3e50; border-radius: 5px; height: 25px; position: relative; overflow: hidden;">
+                    <div id="download-progress-bar" style="background: #3498db; height: 100%; width: 0%; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">
+                    </div>
+                </div>
             </div>
             <div id="image-grid" class="image-grid">
                 <div class="loading">Lade Bilder...</div>
@@ -507,14 +574,14 @@
                     const thumbnailUrl = `/api/images/${encodedProxy}?thumbnail=true`;
                     const fullUrl = `/api/images/${encodedProxy}`;
                     return `
-                    <div class="image-item" data-index="${index}">
+                    <div class="image-item" data-index="${index}" data-filename="${safeProxy}" onclick="toggleImageSelection(this, event)" data-selected="false">
                         <img src="${thumbnailUrl}" 
                              data-src="${fullUrl}" 
                              alt="${encodedOriginal}" 
                              loading="lazy"
                              class="thumbnail-img"
                              onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'200\' height=\'200\'%3E%3Ctext x=\'50%25\' y=\'50%25\' text-anchor=\'middle\'%3EBild nicht gefunden%3C/text%3E%3C/svg%3E'">
-                        <div class="image-actions">
+                        <div class="image-actions" onclick="event.stopPropagation()">
                             <button class="download-btn" onclick="downloadImage('${safeProxy}')" title="Original herunterladen">⬇</button>
                             <button class="delete-btn" onclick="deleteImage('${safeProxy}')" title="Löschen">×</button>
                         </div>
@@ -545,6 +612,220 @@
                 console.error('Fehler beim Laden der Bilder:', error);
                 document.getElementById('image-grid').innerHTML = 
                     '<div class="loading">Fehler beim Laden der Bilder</div>';
+            }
+        }
+        
+        // Auswahl-Funktionen
+        function toggleImageSelection(item, event) {
+            // Verhindere Auswahl wenn auf Buttons geklickt wird
+            if (event && (event.target.closest('.image-actions') || event.target.closest('button'))) {
+                return;
+            }
+            
+            const isSelected = item.dataset.selected === 'true';
+            item.dataset.selected = isSelected ? 'false' : 'true';
+            
+            if (isSelected) {
+                item.classList.remove('selected');
+            } else {
+                item.classList.add('selected');
+            }
+            
+            updateSelection();
+        }
+        
+        function updateSelection() {
+            const selectedItems = document.querySelectorAll('.image-item[data-selected="true"]');
+            const count = selectedItems.length;
+            document.getElementById('selected-count').textContent = `${count} ausgewählt`;
+            
+            const downloadBtn = document.getElementById('download-selected-btn');
+            const deleteBtn = document.getElementById('delete-selected-btn');
+            
+            if (count > 0) {
+                downloadBtn.disabled = false;
+                deleteBtn.disabled = false;
+            } else {
+                downloadBtn.disabled = true;
+                deleteBtn.disabled = true;
+            }
+            
+            // Aktualisiere "Alle auswählen" Checkbox
+            const allItems = document.querySelectorAll('.image-item');
+            const selectAllCheckbox = document.getElementById('select-all');
+            if (allItems.length > 0) {
+                selectAllCheckbox.checked = count === allItems.length;
+                selectAllCheckbox.indeterminate = count > 0 && count < allItems.length;
+            }
+        }
+        
+        function toggleSelectAll() {
+            const selectAllCheckbox = document.getElementById('select-all');
+            const allItems = document.querySelectorAll('.image-item');
+            const shouldSelect = selectAllCheckbox.checked;
+            
+            allItems.forEach(item => {
+                item.dataset.selected = shouldSelect ? 'true' : 'false';
+                if (shouldSelect) {
+                    item.classList.add('selected');
+                } else {
+                    item.classList.remove('selected');
+                }
+            });
+            
+            updateSelection();
+        }
+        
+        function getSelectedFilenames() {
+            const selectedItems = document.querySelectorAll('.image-item[data-selected="true"]');
+            return Array.from(selectedItems).map(item => item.dataset.filename);
+        }
+        
+        async function downloadSelected() {
+            const filenames = getSelectedFilenames();
+            if (filenames.length === 0) {
+                alert('Bitte wählen Sie mindestens ein Bild aus.');
+                return;
+            }
+            
+            // Für mehrere Dateien: ZIP erstellen oder einzeln herunterladen
+            if (filenames.length === 1) {
+                // Einzelner Download
+                downloadImage(filenames[0]);
+            } else {
+                // Mehrere Downloads: ZIP erstellen mit Fortschrittsanzeige
+                const progressDiv = document.getElementById('download-progress');
+                const progressBar = document.getElementById('download-progress-bar');
+                const statusText = document.getElementById('download-status');
+                const downloadBtn = document.getElementById('download-selected-btn');
+                
+                // Zeige Fortschrittsanzeige
+                progressDiv.style.display = 'block';
+                downloadBtn.disabled = true;
+                statusText.textContent = `Erstelle ZIP-Archiv mit ${filenames.length} Bildern...`;
+                progressBar.style.width = '10%';
+                progressBar.textContent = '10%';
+                
+                try {
+                    // Simuliere Fortschritt während der Anfrage
+                    let progress = 10;
+                    const progressInterval = setInterval(() => {
+                        progress = Math.min(progress + 5, 90);
+                        progressBar.style.width = progress + '%';
+                        progressBar.textContent = progress + '%';
+                    }, 200);
+                    
+                    const response = await fetch('/api/images/bulk-download', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ filenames: filenames })
+                    });
+                    
+                    clearInterval(progressInterval);
+                    progressBar.style.width = '95%';
+                    progressBar.textContent = '95%';
+                    statusText.textContent = 'ZIP-Archiv wird heruntergeladen...';
+                    
+                    if (response.ok) {
+                        // Lade Blob mit Fortschritt
+                        const contentLength = response.headers.get('content-length');
+                        const reader = response.body.getReader();
+                        const chunks = [];
+                        let receivedLength = 0;
+                        
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            
+                            chunks.push(value);
+                            receivedLength += value.length;
+                            
+                            if (contentLength) {
+                                const percent = Math.min(95 + Math.floor((receivedLength / contentLength) * 5), 99);
+                                progressBar.style.width = percent + '%';
+                                progressBar.textContent = percent + '%';
+                            }
+                        }
+                        
+                        // Erstelle Blob aus Chunks
+                        const blob = new Blob(chunks);
+                        progressBar.style.width = '100%';
+                        progressBar.textContent = '100%';
+                        statusText.textContent = 'Download abgeschlossen!';
+                        
+                        // Starte Download
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `bilder_${new Date().toISOString().split('T')[0]}.zip`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+                        
+                        // Warte kurz, dann verstecke Fortschrittsanzeige
+                        setTimeout(() => {
+                            progressDiv.style.display = 'none';
+                            progressBar.style.width = '0%';
+                            progressBar.textContent = '';
+                            downloadBtn.disabled = false;
+                        }, 1500);
+                        
+                        // Auswahl zurücksetzen
+                        document.querySelectorAll('.image-item').forEach(item => {
+                            item.dataset.selected = 'false';
+                            item.classList.remove('selected');
+                        });
+                        updateSelection();
+                    } else {
+                        const result = await response.json();
+                        progressDiv.style.display = 'none';
+                        downloadBtn.disabled = false;
+                        alert('Fehler beim Herunterladen: ' + (result.error || 'Unbekannter Fehler'));
+                    }
+                } catch (error) {
+                    const progressDiv = document.getElementById('download-progress');
+                    const downloadBtn = document.getElementById('download-selected-btn');
+                    progressDiv.style.display = 'none';
+                    downloadBtn.disabled = false;
+                    alert('Fehler beim Herunterladen: ' + error);
+                }
+            }
+        }
+        
+        async function deleteSelected() {
+            const filenames = getSelectedFilenames();
+            if (filenames.length === 0) {
+                alert('Bitte wählen Sie mindestens ein Bild aus.');
+                return;
+            }
+            
+            const count = filenames.length;
+            if (!confirm(`Möchten Sie wirklich ${count} Bild${count > 1 ? 'er' : ''} löschen?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/images/bulk-delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ filenames: filenames })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert(`${result.deleted_count || count} Bild${count > 1 ? 'er' : ''} erfolgreich gelöscht.`);
+                    loadImages();
+                } else {
+                    alert('Fehler beim Löschen: ' + (result.error || 'Unbekannter Fehler'));
+                }
+            } catch (error) {
+                alert('Fehler beim Löschen: ' + error);
             }
         }
         
@@ -754,16 +1035,122 @@
                 const response = await fetch('/api/system/info');
                 const info = await response.json();
                 
+                // Berechne Prozentsatz für Speicheranzeige
+                const storagePercent = info.storage.disk_usage_percent || 0;
+                const storageColor = storagePercent > 90 ? '#e74c3c' : storagePercent > 75 ? '#f39c12' : '#2ecc71';
+                
                 document.getElementById('system-info').innerHTML = `
                     <div class="info-box">
                         <h3>Bilder</h3>
-                        <p>Proxy-Bilder: ${info.proxy_images}</p>
-                        <p>Original-Bilder: ${info.original_images}</p>
+                        <p><strong>Proxy-Bilder:</strong> ${info.proxy_images}</p>
+                        <p><strong>Original-Bilder:</strong> ${info.original_images}</p>
+                        <p><strong>Eindeutige Bilder:</strong> ${info.unique_images || info.proxy_images}</p>
+                        <p><strong>Duplikate:</strong> <span style="color: ${info.duplicates > 0 ? '#f39c12' : '#2ecc71'}">${info.duplicates || 0}</span></p>
+                    </div>
+                    
+                    <div class="info-box" style="margin-top: 20px;">
+                        <h3>Speicherbedarf (Bilder)</h3>
+                        <p><strong>Original-Bilder:</strong> ${info.storage.original_size_formatted}</p>
+                        <p><strong>Proxy-Bilder:</strong> ${info.storage.proxy_size_formatted}</p>
+                        <p><strong>Gesamt:</strong> ${info.storage.total_size_formatted}</p>
+                    </div>
+                    
+                    <div class="info-box" style="margin-top: 20px;">
+                        <h3>Speicherkapazität (System)</h3>
+                        <p><strong>Gesamt:</strong> ${info.storage.disk_total_formatted}</p>
+                        <p><strong>Belegt:</strong> ${info.storage.disk_used_formatted} (${storagePercent}%)</p>
+                        <p><strong>Frei:</strong> ${info.storage.disk_free_formatted}</p>
+                        <div style="margin-top: 10px; background: #34495e; border-radius: 5px; height: 25px; position: relative; overflow: hidden;">
+                            <div style="background: ${storageColor}; height: 100%; width: ${storagePercent}%; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;">
+                                ${storagePercent > 5 ? storagePercent + '%' : ''}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="info-box" style="margin-top: 20px;">
+                        <h3>System-Update</h3>
+                        <p style="margin-bottom: 15px;">Aktualisiere das Picture Frame System auf die neueste Version aus GitHub.</p>
+                        <button class="btn" onclick="startSystemUpdate()" id="update-btn" style="background: #27ae60; width: 100%;">
+                            🔄 System aktualisieren
+                        </button>
+                        <div id="update-progress" style="display: none; margin-top: 15px;">
+                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                                <div class="spinner" style="width: 20px; height: 20px; border: 3px solid #2c3e50; border-top: 3px solid #27ae60; border-radius: 50%;"></div>
+                                <strong style="color: #ecf0f1;" id="update-status">Update läuft...</strong>
+                            </div>
+                            <div id="update-logs" style="background: #1a1a2e; padding: 15px; border-radius: 5px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; color: #bdc3c7; white-space: pre-wrap; word-wrap: break-word;">
+                            </div>
+                        </div>
                     </div>
                 `;
             } catch (error) {
+                console.error('Fehler beim Laden der Systeminformationen:', error);
                 document.getElementById('system-info').innerHTML = 
                     '<div class="loading">Fehler beim Laden der Informationen</div>';
+            }
+        }
+        
+        // System-Update
+        async function startSystemUpdate() {
+            const updateBtn = document.getElementById('update-btn');
+            const progressDiv = document.getElementById('update-progress');
+            const statusText = document.getElementById('update-status');
+            const logsDiv = document.getElementById('update-logs');
+            
+            if (!confirm('Möchten Sie das System wirklich aktualisieren? Der Service wird neu gestartet.')) {
+                return;
+            }
+            
+            // Zeige Fortschrittsanzeige
+            updateBtn.disabled = true;
+            progressDiv.style.display = 'block';
+            statusText.textContent = 'Update läuft...';
+            statusText.style.color = '#ecf0f1';
+            logsDiv.textContent = 'Starte Update...\n';
+            
+            try {
+                const response = await fetch('/api/system/update', {
+                    method: 'POST'
+                });
+                
+                const result = await response.json();
+                
+                // Zeige Logs
+                if (result.logs && result.logs.length > 0) {
+                    logsDiv.textContent = result.logs.join('\n');
+                    logsDiv.scrollTop = logsDiv.scrollHeight;
+                }
+                
+                if (result.success) {
+                    if (result.has_changes) {
+                        statusText.textContent = '✅ Update erfolgreich! Service wurde neu gestartet.';
+                        statusText.style.color = '#2ecc71';
+                        logsDiv.textContent += '\n\n✅ Update erfolgreich abgeschlossen!';
+                    } else {
+                        statusText.textContent = 'ℹ️ Bereits auf dem neuesten Stand.';
+                        statusText.style.color = '#3498db';
+                        logsDiv.textContent += '\n\nℹ️ Keine Updates verfügbar.';
+                    }
+                    
+                    // Nach 5 Sekunden Seite neu laden (falls Service neu gestartet wurde)
+                    if (result.has_changes) {
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 5000);
+                    } else {
+                        updateBtn.disabled = false;
+                    }
+                } else {
+                    statusText.textContent = '❌ Update fehlgeschlagen';
+                    statusText.style.color = '#e74c3c';
+                    logsDiv.textContent += `\n\n❌ Fehler: ${result.error || 'Unbekannter Fehler'}`;
+                    updateBtn.disabled = false;
+                }
+            } catch (error) {
+                statusText.textContent = '❌ Update fehlgeschlagen';
+                statusText.style.color = '#e74c3c';
+                logsDiv.textContent += `\n\n❌ Fehler: ${error}`;
+                updateBtn.disabled = false;
             }
         }
         
