@@ -50,9 +50,11 @@ class WebInterface:
         self._upload_queue = []
         self._upload_queue_lock = threading.Lock()
         self._processing_timer = None
-        self._processing_delay = 5.0  # 5 Sekunden warten nach letztem Upload
+        self._processing_delay = 15.0  # 15 Sekunden warten nach letztem Upload (längere Pause)
         self._processing_batch_size = 5  # Max. 5 Bilder auf einmal verarbeiten
         self._is_processing = False  # Flag um parallele Verarbeitung zu verhindern
+        self._upload_in_progress = False  # Flag: Läuft gerade ein Upload?
+        self._upload_in_progress_lock = threading.Lock()  # Lock für Upload-Flag
         
         self.setup_routes()
     
@@ -73,6 +75,14 @@ class WebInterface:
         if self._is_processing:
             logger.debug("Verarbeitung läuft bereits, überspringe...")
             return
+        
+        # Prüfe, ob gerade ein Upload läuft - wenn ja, verschiebe Verarbeitung
+        with self._upload_in_progress_lock:
+            if self._upload_in_progress:
+                logger.info("Upload läuft gerade, verschiebe Verarbeitung...")
+                # Plane Verarbeitung erneut (nach Verzögerung)
+                self._schedule_processing()
+                return
         
         with self._upload_queue_lock:
             if not self._upload_queue:
@@ -183,9 +193,15 @@ class WebInterface:
             
             # Wenn noch Bilder in der Queue sind, verarbeite den nächsten Batch
             if queue_remaining > 0:
-                logger.info(f"Verarbeite nächsten Batch in 2 Sekunden...")
-                time.sleep(2)  # Kurze Pause zwischen Batches
-                self._process_upload_queue()  # Rekursiver Aufruf für nächsten Batch
+                # Prüfe erneut, ob Upload läuft
+                with self._upload_in_progress_lock:
+                    if self._upload_in_progress:
+                        logger.info("Upload läuft während Verarbeitung, verschiebe nächsten Batch...")
+                        self._schedule_processing()  # Plane Verarbeitung erneut
+                    else:
+                        logger.info(f"Verarbeite nächsten Batch in 2 Sekunden...")
+                        time.sleep(2)  # Kurze Pause zwischen Batches
+                        self._process_upload_queue()  # Rekursiver Aufruf für nächsten Batch
         finally:
             self._is_processing = False
     
@@ -657,46 +673,56 @@ class WebInterface:
                     logger.warning(f"Dateiformat nicht unterstützt: {file.filename}")
                     return jsonify({'success': False, 'error': 'Dateiformat nicht unterstützt'}), 400
                 
-                # Original speichern (schnell, ohne Verarbeitung)
-                original_dir = Path(self.config.get('paths.original_images'))
-                original_dir.mkdir(parents=True, exist_ok=True)  # Stelle sicher, dass Verzeichnis existiert
+                # Markiere, dass Upload läuft (verhindert Verarbeitung während Übertragung)
+                with self._upload_in_progress_lock:
+                    self._upload_in_progress = True
                 
-                filename = secure_filename(file.filename)
-                original_path = original_dir / filename
-                
-                # Falls Datei existiert, Nummer anhängen
-                counter = 1
-                while original_path.exists():
-                    stem = Path(filename).stem
-                    suffix = Path(filename).suffix
-                    original_path = original_dir / f"{stem}_{counter}{suffix}"
-                    counter += 1
-                
-                # Speichere Datei (schnell)
-                logger.info(f"Speichere Upload: {original_path.name} ({file_size // 1024}KB)")
-                file.save(str(original_path))
-                
-                # Verifiziere, dass Datei gespeichert wurde
-                if not original_path.exists():
-                    logger.error(f"Datei konnte nicht gespeichert werden: {original_path}")
-                    return jsonify({'success': False, 'error': 'Fehler beim Speichern'}), 500
-                
-                # Name aus POST-Request holen (falls vorhanden)
-                uploader_name = request.form.get('name', 'Manueller Upload')
-                if not uploader_name or uploader_name.strip() == '':
-                    uploader_name = 'Manueller Upload'
-                
-                # Zur Verarbeitungs-Queue hinzufügen (verzögerte Verarbeitung)
-                with self._upload_queue_lock:
-                    self._upload_queue.append({
-                        'original_path': original_path,
-                        'uploader_name': uploader_name.strip()
-                    })
-                    queue_size = len(self._upload_queue)
-                    logger.info(f"Bild zur Verarbeitungs-Queue hinzugefügt: {original_path.name} (Queue-Größe: {queue_size})")
-                
-                # Timer zurücksetzen (warte auf weitere Uploads)
-                self._schedule_processing()
+                try:
+                    # Original speichern (schnell, ohne Verarbeitung)
+                    original_dir = Path(self.config.get('paths.original_images'))
+                    original_dir.mkdir(parents=True, exist_ok=True)  # Stelle sicher, dass Verzeichnis existiert
+                    
+                    filename = secure_filename(file.filename)
+                    original_path = original_dir / filename
+                    
+                    # Falls Datei existiert, Nummer anhängen
+                    counter = 1
+                    while original_path.exists():
+                        stem = Path(filename).stem
+                        suffix = Path(filename).suffix
+                        original_path = original_dir / f"{stem}_{counter}{suffix}"
+                        counter += 1
+                    
+                    # Speichere Datei (schnell)
+                    logger.info(f"Speichere Upload: {original_path.name} ({file_size // 1024}KB)")
+                    file.save(str(original_path))
+                    
+                    # Verifiziere, dass Datei gespeichert wurde
+                    if not original_path.exists():
+                        logger.error(f"Datei konnte nicht gespeichert werden: {original_path}")
+                        return jsonify({'success': False, 'error': 'Fehler beim Speichern'}), 500
+                    
+                    # Name aus POST-Request holen (falls vorhanden)
+                    uploader_name = request.form.get('name', 'Manueller Upload')
+                    if not uploader_name or uploader_name.strip() == '':
+                        uploader_name = 'Manueller Upload'
+                    
+                    # Zur Verarbeitungs-Queue hinzufügen (verzögerte Verarbeitung)
+                    with self._upload_queue_lock:
+                        self._upload_queue.append({
+                            'original_path': original_path,
+                            'uploader_name': uploader_name.strip()
+                        })
+                        queue_size = len(self._upload_queue)
+                        logger.info(f"Bild zur Verarbeitungs-Queue hinzugefügt: {original_path.name} (Queue-Größe: {queue_size})")
+                    
+                    # Timer zurücksetzen (warte auf weitere Uploads - längere Pause)
+                    self._schedule_processing()
+                finally:
+                    # Upload abgeschlossen - Flag zurücksetzen
+                    with self._upload_in_progress_lock:
+                        self._upload_in_progress = False
+                    logger.debug("Upload-Flag zurückgesetzt")
                 
                 # Sofortige Antwort (wichtig für iOS-Kompatibilität)
                 return jsonify({
