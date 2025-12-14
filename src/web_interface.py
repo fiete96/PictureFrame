@@ -813,6 +813,26 @@ class WebInterface:
                 logger.error(f"Fehler beim Aktualisieren der Konfiguration: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
+        @self.app.route('/api/upload/status')
+        def upload_status():
+            """Gibt den aktuellen Status der Upload-Verarbeitung zurück"""
+            with self._upload_queue_lock:
+                queue_size = len(self._upload_queue)
+            
+            with self._upload_in_progress_lock:
+                upload_in_progress = self._upload_in_progress
+            
+            timer_active = self._processing_timer is not None and self._processing_timer.is_alive()
+            
+            return jsonify({
+                'is_processing': self._is_processing,
+                'upload_in_progress': upload_in_progress,
+                'queue_size': queue_size,
+                'timer_active': timer_active,
+                'processing_delay': self._processing_delay,
+                'batch_size': self._processing_batch_size
+            })
+        
         @self.app.route('/api/system/info')
         def system_info():
             """Gibt Systeminformationen zurück"""
