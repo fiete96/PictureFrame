@@ -106,23 +106,39 @@ class WebInterface:
                 self._schedule_processing()
                 return
         
-        # Prüfe Queue-Größe
-        with self._upload_queue_lock:
-            queue_size = len(self._upload_queue)
-            if not self._upload_queue:
-                logger.info("Upload-Queue ist leer, keine Verarbeitung nötig")
-                return
-            logger.info(f"Starte Verarbeitung: {queue_size} Bilder in Queue")
-            
-            # Nimm nur einen Batch (max. 5 Bilder)
-            batch_size = min(self._processing_batch_size, len(self._upload_queue))
-            batch = self._upload_queue[:batch_size]
-            self._upload_queue = self._upload_queue[batch_size:]
-            queue_remaining = len(self._upload_queue)
-        
+        # Setze Flag, damit keine parallele Verarbeitung startet
         self._is_processing = True
         
         try:
+            # Verarbeite ALLE Batches in einer Schleife (robuster als Threads)
+            batch_number = 0
+            while True:
+                batch_number += 1
+                
+                # Prüfe Queue-Größe
+                with self._upload_queue_lock:
+                    queue_size = len(self._upload_queue)
+                    if not self._upload_queue:
+                        logger.info(f"Upload-Queue ist leer nach Batch {batch_number-1}, Verarbeitung abgeschlossen")
+                        break
+                    
+                    # Prüfe, ob Upload läuft - wenn ja, pausiere
+                    with self._upload_in_progress_lock:
+                        if self._upload_in_progress:
+                            logger.info("Upload läuft während Verarbeitung, pausiere...")
+                            # Plane Verarbeitung erneut (nach Verzögerung)
+                            self._schedule_processing()
+                            return
+                    
+                    logger.info(f"Starte Batch {batch_number}: {queue_size} Bilder in Queue")
+                    
+                    # Nimm nur einen Batch (max. 5 Bilder)
+                    batch_size = min(self._processing_batch_size, len(self._upload_queue))
+                    batch = self._upload_queue[:batch_size]
+                    self._upload_queue = self._upload_queue[batch_size:]
+                    queue_remaining = len(self._upload_queue)
+                
+                logger.info(f"Verarbeite Batch {batch_number} von {batch_size} Bildern (noch {queue_remaining} in Queue)...")
             logger.info(f"Verarbeite Batch von {batch_size} Bildern (noch {queue_remaining} in Queue)...")
             
             proxy_dir = Path(self.config.get('paths.proxy_images'))
@@ -204,61 +220,27 @@ class WebInterface:
             import gc
             gc.collect()
             
-            logger.info(f"Verarbeitung von {batch_size} Bildern abgeschlossen (noch {queue_remaining} in Queue).")
+                logger.info(f"Batch {batch_number} abgeschlossen: {batch_size} Bilder verarbeitet (noch {queue_remaining} in Queue)")
+                
+                # Kurze Pause zwischen Batches (2 Sekunden)
+                if queue_remaining > 0:
+                    logger.info(f"Pause von 2 Sekunden vor nächstem Batch...")
+                    time.sleep(2)
+                
+                # Speicherfreigabe nach jedem Batch
+                import gc
+                gc.collect()
             
-            # Signalisiere GUI, dass neue Bilder vorhanden sind (nur wenn Queue leer ist)
-            if queue_remaining == 0:
-                if self.settings_queue:
-                    try:
-                        self.settings_queue.put('reload_settings', block=False)
-                        logger.info("Reload-Signal an GUI gesendet nach Upload-Verarbeitung")
-                    except queue.Full:
-                        logger.warning("Settings-Queue voll, überspringe Reload-Signal")
-                    except Exception as e:
-                        logger.error(f"Fehler beim Senden des Reload-Signals nach Upload: {e}")
-            
-            # Wenn noch Bilder in der Queue sind, verarbeite den nächsten Batch
-            if queue_remaining > 0:
-                # Prüfe erneut, ob Upload läuft
-                with self._upload_in_progress_lock:
-                    if self._upload_in_progress:
-                        logger.info("Upload läuft während Verarbeitung, verschiebe nächsten Batch...")
-                        # Flag wird im finally-Block zurückgesetzt
-                        # Plane Verarbeitung erneut (nach Verzögerung)
-                        self._schedule_processing()
-                    else:
-                        logger.info(f"Verarbeite nächsten Batch in 2 Sekunden (noch {queue_remaining} Bilder)...")
-                        # WICHTIG: Setze Flag VOR dem Starten des Threads zurück
-                        # Sonst wird der Thread abgelehnt, weil Flag noch True ist
-                        self._is_processing = False
-                        logger.info(f"_is_processing Flag zurückgesetzt für nächsten Batch (Queue: {queue_remaining} Bilder)")
-                        
-                        # Starte nächsten Batch in separatem Thread nach kurzer Pause
-                        # (verhindert Stack-Overflow bei vielen Batches)
-                        def start_next_batch():
-                            try:
-                                logger.info(f"Thread für nächsten Batch gestartet, warte 2 Sekunden...")
-                                time.sleep(2)  # Kurze Pause zwischen Batches
-                                logger.info("Starte nächsten Batch jetzt...")
-                                # Prüfe Flag-Status vor Aufruf
-                                logger.info(f"_is_processing vor Aufruf: {self._is_processing}")
-                                # Direkter rekursiver Aufruf (Flag ist bereits False)
-                                self._process_upload_queue()
-                            except Exception as e:
-                                logger.error(f"Fehler im Thread für nächsten Batch: {e}", exc_info=True)
-                        
-                        try:
-                            next_batch_thread = threading.Thread(target=start_next_batch, daemon=True)
-                            next_batch_thread.start()
-                            logger.info(f"Thread für nächsten Batch gestartet (Thread-ID: {next_batch_thread.ident})")
-                        except Exception as e:
-                            logger.error(f"Fehler beim Starten des Threads für nächsten Batch: {e}", exc_info=True)
-                            # Fallback: Starte Verarbeitung direkt
-                            self._is_processing = False
-                            self._process_upload_queue()
-                        # WICHTIG: Return hier, damit finally-Block das Flag nicht nochmal zurücksetzt
-                        # (Flag ist bereits False gesetzt)
-                        return
+            # Alle Batches verarbeitet - Signalisiere GUI
+            logger.info(f"Alle Batches verarbeitet ({batch_number} Batches insgesamt)")
+            if self.settings_queue:
+                try:
+                    self.settings_queue.put('reload_settings', block=False)
+                    logger.info("Reload-Signal an GUI gesendet nach Upload-Verarbeitung")
+                except queue.Full:
+                    logger.warning("Settings-Queue voll, überspringe Reload-Signal")
+                except Exception as e:
+                    logger.error(f"Fehler beim Senden des Reload-Signals nach Upload: {e}")
         finally:
             # Flag immer zurücksetzen, damit nächster Batch starten kann
             # (nur wenn nicht bereits zurückgesetzt für nächsten Batch)
