@@ -3385,6 +3385,9 @@ class MainWindow(QMainWindow):
         
         self.settings_queue = None  # Wird von außen gesetzt
         
+        # QR-Code-Umschaltung: True = Web-Interface, False = iOS Shortcut
+        self.qr_code_mode_web = True
+        
         # Initialisiere Slideshow SOFORT (nicht verzögert), damit das erste Bild schnell geladen wird
         # Verwende QTimer.singleShot(0) um es im nächsten Event-Loop-Zyklus auszuführen
         # Das stellt sicher, dass das Fenster bereits angezeigt wurde
@@ -3686,44 +3689,63 @@ class MainWindow(QMainWindow):
         # Rechte Hälfte: QR-Code
         if QRCODE_AVAILABLE and ip_text != "Nicht verbunden":
             try:
-                # Erstelle QR-Code mit Webinterface-URL
+                # Erstelle beide QR-Codes
                 port = self.config.get('web.port', 80)
-                url = f"http://{ip_text}:{port}"
+                web_url = f"http://{ip_text}:{port}"
+                shortcut_url = "https://www.icloud.com/shortcuts/a309109b0b774647aad21dbbbe0a864c"
                 
-                qr = qrcode.QRCode(version=1, box_size=4, border=2)
-                qr.add_data(url)
-                qr.make(fit=True)
+                # Funktion zum Erstellen eines QR-Codes
+                def create_qr_code(data):
+                    qr = qrcode.QRCode(version=1, box_size=4, border=2)
+                    qr.add_data(data)
+                    qr.make(fit=True)
+                    img = qr.make_image(fill_color="#ecf0f1", back_color="#2c3e50")
+                    img_bytes = io.BytesIO()
+                    img.save(img_bytes, format='PNG')
+                    img_bytes.seek(0)
+                    qimage = QImage()
+                    qimage.loadFromData(img_bytes.read())
+                    qpixmap = QPixmap.fromImage(qimage)
+                    max_size = 120
+                    if qpixmap.width() > max_size or qpixmap.height() > max_size:
+                        qpixmap = qpixmap.scaled(max_size, max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    return qpixmap
                 
-                # QR-Code mit passender Farbgebung (dunkel wie Design)
-                img = qr.make_image(fill_color="#ecf0f1", back_color="#2c3e50")
+                # Erstelle beide QR-Codes
+                web_qr_pixmap = create_qr_code(web_url)
+                shortcut_qr_pixmap = create_qr_code(shortcut_url)
                 
-                # Konvertiere PIL Image zu QPixmap
-                img_bytes = io.BytesIO()
-                img.save(img_bytes, format='PNG')
-                img_bytes.seek(0)
+                # Funktion zum Umschalten des QR-Codes
+                def toggle_qr_code():
+                    self.qr_code_mode_web = not self.qr_code_mode_web
+                    if self.qr_code_mode_web:
+                        qr_label.setPixmap(web_qr_pixmap)
+                        url_label.setText(f"Web:\n{web_url}")
+                    else:
+                        qr_label.setPixmap(shortcut_qr_pixmap)
+                        url_label.setText("iOS Shortcut:\nBilder hochladen")
                 
-                qimage = QImage()
-                qimage.loadFromData(img_bytes.read())
-                qpixmap = QPixmap.fromImage(qimage)
-                
-                # Skaliere QR-Code auf passende Größe (kleiner für kompakteres Layout)
-                max_size = 120
-                if qpixmap.width() > max_size or qpixmap.height() > max_size:
-                    qpixmap = qpixmap.scaled(max_size, max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                
+                # Initialisiere mit Web-Interface QR-Code
                 qr_label = QLabel()
-                qr_label.setPixmap(qpixmap)
+                qr_label.setPixmap(web_qr_pixmap)
                 qr_label.setAlignment(Qt.AlignCenter)
-                qr_label.setStyleSheet("background: #2c3e50; padding: 5px; border-radius: 6px; border: 2px solid #34495e;")
+                qr_label.setStyleSheet("background: #2c3e50; padding: 5px; border-radius: 6px; border: 2px solid #34495e; cursor: pointer;")
+                qr_label.mousePressEvent = lambda e: toggle_qr_code()  # Klick-Handler
                 
                 right_layout = QVBoxLayout()
                 right_layout.setSpacing(3)
                 right_layout.addWidget(qr_label)
-                url_label = QLabel(f"Web:\n{url}")
+                url_label = QLabel(f"Web:\n{web_url}")
                 url_label.setStyleSheet("font-size: 11px; color: #ecf0f1; padding: 2px;")
                 url_label.setAlignment(Qt.AlignCenter)
                 url_label.setWordWrap(True)
                 right_layout.addWidget(url_label)
+                
+                # Hinweis zum Umschalten
+                hint_label = QLabel("(Klicken zum Umschalten)")
+                hint_label.setStyleSheet("font-size: 9px; color: #95a5a6; padding: 2px;")
+                hint_label.setAlignment(Qt.AlignCenter)
+                right_layout.addWidget(hint_label)
                 
                 right_widget = QWidget()
                 right_widget.setLayout(right_layout)
