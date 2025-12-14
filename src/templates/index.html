@@ -464,13 +464,19 @@
             </div>
             
             <h3 style="margin-top: 30px;">WLAN</h3>
+            <div class="info-box" style="margin-bottom: 15px; background: #34495e; border-color: #3498db;">
+                <p style="margin: 0; font-size: 14px; color: #ecf0f1;">
+                    <strong>Hinweis:</strong> Geben Sie SSID und Passwort ein und klicken Sie auf "Einstellungen speichern", 
+                    um eine WLAN-Verbindung herzustellen. Die Verbindung wird automatisch aktiviert.
+                </p>
+            </div>
             <div class="form-group">
                 <label>SSID:</label>
-                <input type="text" id="wifi-ssid">
+                <input type="text" id="wifi-ssid" placeholder="WLAN-Netzwerkname">
             </div>
             <div class="form-group">
                 <label>Passwort:</label>
-                <input type="password" id="wifi-password">
+                <input type="password" id="wifi-password" placeholder="WLAN-Passwort (leer lassen für offenes Netzwerk)">
             </div>
             
             <button class="btn" onclick="saveSettings()" style="margin-top: 20px;">

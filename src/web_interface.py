@@ -741,10 +741,64 @@ class WebInterface:
                         self.config.set('display.schedule_off_time', str(data['display']['schedule_off_time']))
                 
                 if 'wifi' in data:
+                    # WLAN-Daten in config.yaml speichern (für Anzeige)
                     if 'ssid' in data['wifi']:
                         self.config.set('wifi.ssid', data['wifi']['ssid'])
                     if 'password' in data['wifi']:
                         self.config.set('wifi.password', data['wifi']['password'])
+                    
+                    # WICHTIG: Wenn SSID und Password vorhanden sind, erstelle auch die NetworkManager-Verbindung
+                    # Dies stellt sicher, dass die WLAN-Verbindung tatsächlich hergestellt wird
+                    if 'ssid' in data['wifi'] and data['wifi']['ssid']:
+                        ssid = data['wifi']['ssid'].strip()
+                        password = data['wifi'].get('password', '').strip() if 'password' in data['wifi'] else ''
+                        
+                        # Erstelle/aktualisiere WLAN-Verbindung über NetworkManager
+                        try:
+                            logger.info(f"Erstelle WLAN-Verbindung über Webinterface: SSID={ssid}")
+                            
+                            # Lösche eventuell vorhandene Verbindung mit gleichem Namen
+                            subprocess.run(['sudo', '-n', 'nmcli', 'connection', 'delete', ssid], 
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                            
+                            if password:
+                                # Netzwerk mit Passwort
+                                cmd = ['sudo', '-n', 'nmcli', 'connection', 'add', 
+                                       'type', 'wifi',
+                                       'con-name', ssid,
+                                       'ssid', ssid,
+                                       'wifi-sec.key-mgmt', 'wpa-psk',
+                                       'wifi-sec.psk', password,
+                                       'connection.autoconnect', 'yes',
+                                       'connection.autoconnect-priority', '10',
+                                       'wifi.powersave', '2']
+                            else:
+                                # Offenes Netzwerk ohne Passwort
+                                cmd = ['sudo', '-n', 'nmcli', 'connection', 'add',
+                                       'type', 'wifi',
+                                       'con-name', ssid,
+                                       'ssid', ssid,
+                                       'connection.autoconnect', 'yes',
+                                       'connection.autoconnect-priority', '10',
+                                       'wifi.powersave', '2']
+                            
+                            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                            
+                            if result.returncode == 0:
+                                # Aktiviere die Verbindung
+                                logger.info(f"Aktiviere WLAN-Verbindung: {ssid}")
+                                activate_cmd = ['sudo', '-n', 'nmcli', 'connection', 'up', ssid]
+                                activate_result = subprocess.run(activate_cmd, capture_output=True, text=True, timeout=30)
+                                
+                                if activate_result.returncode == 0:
+                                    logger.info(f"WLAN-Verbindung erfolgreich erstellt und aktiviert: {ssid}")
+                                else:
+                                    logger.warning(f"WLAN-Verbindung erstellt, aber Aktivierung fehlgeschlagen: {activate_result.stderr}")
+                            else:
+                                logger.error(f"Fehler beim Erstellen der WLAN-Verbindung: {result.stderr}")
+                        except Exception as e:
+                            logger.error(f"Fehler beim Erstellen der WLAN-Verbindung über Webinterface: {e}", exc_info=True)
+                            # Fehler wird nicht an den Client zurückgegeben, da config.yaml bereits gespeichert wurde
                 
                 # Signalisiere, dass Einstellungen aktualisiert wurden (über Queue)
                 if self.settings_queue:
