@@ -236,17 +236,26 @@ class WebInterface:
                         # Starte nächsten Batch in separatem Thread nach kurzer Pause
                         # (verhindert Stack-Overflow bei vielen Batches)
                         def start_next_batch():
-                            logger.info(f"Thread für nächsten Batch gestartet, warte 2 Sekunden...")
-                            time.sleep(2)  # Kurze Pause zwischen Batches
-                            logger.info("Starte nächsten Batch jetzt...")
-                            # Prüfe Flag-Status vor Aufruf
-                            logger.debug(f"_is_processing vor Aufruf: {self._is_processing}")
-                            # Direkter rekursiver Aufruf (Flag ist bereits False)
-                            self._process_upload_queue()
+                            try:
+                                logger.info(f"Thread für nächsten Batch gestartet, warte 2 Sekunden...")
+                                time.sleep(2)  # Kurze Pause zwischen Batches
+                                logger.info("Starte nächsten Batch jetzt...")
+                                # Prüfe Flag-Status vor Aufruf
+                                logger.info(f"_is_processing vor Aufruf: {self._is_processing}")
+                                # Direkter rekursiver Aufruf (Flag ist bereits False)
+                                self._process_upload_queue()
+                            except Exception as e:
+                                logger.error(f"Fehler im Thread für nächsten Batch: {e}", exc_info=True)
                         
-                        next_batch_thread = threading.Thread(target=start_next_batch, daemon=True)
-                        next_batch_thread.start()
-                        logger.info(f"Thread für nächsten Batch gestartet (Thread-ID: {next_batch_thread.ident})")
+                        try:
+                            next_batch_thread = threading.Thread(target=start_next_batch, daemon=True)
+                            next_batch_thread.start()
+                            logger.info(f"Thread für nächsten Batch gestartet (Thread-ID: {next_batch_thread.ident})")
+                        except Exception as e:
+                            logger.error(f"Fehler beim Starten des Threads für nächsten Batch: {e}", exc_info=True)
+                            # Fallback: Starte Verarbeitung direkt
+                            self._is_processing = False
+                            self._process_upload_queue()
                         # WICHTIG: Return hier, damit finally-Block das Flag nicht nochmal zurücksetzt
                         # (Flag ist bereits False gesetzt)
                         return
