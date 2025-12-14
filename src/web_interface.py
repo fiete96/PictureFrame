@@ -872,6 +872,14 @@ class WebInterface:
                         'logs': update_log
                     }), 500
                 
+                # Sichere config.yaml vor dem Update (wird nicht überschrieben)
+                config_file = project_dir / 'config.yaml'
+                config_backup = project_dir / 'config.yaml.backup'
+                if config_file.exists():
+                    import shutil
+                    shutil.copy2(config_file, config_backup)
+                    update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] config.yaml gesichert")
+                
                 # Prüfe auf lokale Änderungen
                 update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Prüfe auf lokale Änderungen...")
                 status_result = subprocess.run(
@@ -930,6 +938,31 @@ class WebInterface:
                         }), 500
                     
                     update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Git Pull erfolgreich")
+                    
+                    # Stelle sicher, dass config.yaml nicht überschrieben wurde
+                    if config_backup.exists() and config_file.exists():
+                        # Prüfe ob config.yaml geändert wurde (durch Git-Pull)
+                        try:
+                            import filecmp
+                            if not filecmp.cmp(config_file, config_backup, shallow=False):
+                                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] config.yaml wurde geändert - stelle Backup wieder her...")
+                                shutil.copy2(config_backup, config_file)
+                                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] config.yaml wiederhergestellt")
+                            else:
+                                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] config.yaml unverändert")
+                        except Exception as e:
+                            logger.warning(f"Fehler beim Prüfen der config.yaml: {e}")
+                            # Im Zweifel: Backup wiederherstellen
+                            if config_backup.exists():
+                                shutil.copy2(config_backup, config_file)
+                                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] config.yaml aus Backup wiederhergestellt (Vorsichtsmaßnahme)")
+                    
+                    # Lösche Backup-Datei
+                    if config_backup.exists():
+                        try:
+                            config_backup.unlink()
+                        except:
+                            pass
                     
                 except subprocess.TimeoutExpired:
                     return jsonify({

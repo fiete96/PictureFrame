@@ -29,6 +29,7 @@ logs/
 temp/
 *.log
 config.yaml.local
+config.yaml
 Logo.png
 Logo PictureFrame*.png
 
