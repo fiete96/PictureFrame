@@ -139,87 +139,82 @@ class WebInterface:
                     queue_remaining = len(self._upload_queue)
                 
                 logger.info(f"Verarbeite Batch {batch_number} von {batch_size} Bildern (noch {queue_remaining} in Queue)...")
-            logger.info(f"Verarbeite Batch von {batch_size} Bildern (noch {queue_remaining} in Queue)...")
-            
-            proxy_dir = Path(self.config.get('paths.proxy_images'))
-            metadata_file = proxy_dir / 'metadata.json'
-            
-            # Lade Metadaten einmal (wird für alle Bilder verwendet)
-            metadata = {}
-            if metadata_file.exists():
-                try:
-                    with open(metadata_file, 'r', encoding='utf-8') as f:
-                        metadata = json.load(f)
-                except Exception as e:
-                    logger.error(f"Fehler beim Laden der Metadaten: {e}")
-                    metadata = {}
-            
-            # Verarbeite jedes Bild nacheinander (nicht parallel!)
-            for item in batch:
-                try:
-                    original_path = item['original_path']
-                    uploader_name = item['uploader_name']
-                    
-                    logger.info(f"Verarbeite Bild: {original_path.name}")
-                    
-                    # Proxy erstellen
-                    proxy_path = self.image_processor.process_image(original_path, proxy_dir)
-                    
-                    # EXIF-Daten extrahieren
-                    exif_data = ExifExtractor.extract_all_exif(original_path)
-                    
-                    # Metadaten aktualisieren
-                    image_hash = proxy_path.stem
-                    metadata[image_hash] = {
-                        'sender': uploader_name,
-                        'subject': '',
-                        'date': exif_data.get('date') or datetime.now().isoformat(),
-                        'location': exif_data.get('location'),
-                        'latitude': exif_data.get('latitude'),
-                        'longitude': exif_data.get('longitude'),
-                        'exif_data': exif_data
-                    }
-                    
-                    # Speicherfreigabe nach jedem Bild
-                    import gc
-                    gc.collect()
-                    
-                except Exception as e:
-                    logger.error(f"Fehler beim Verarbeiten von {original_path}: {e}", exc_info=True)
-                    continue
-            
-            # Speichere Metadaten einmal für alle Bilder im Batch
-            try:
-                metadata_file.parent.mkdir(parents=True, exist_ok=True)
-                with open(metadata_file, 'w', encoding='utf-8') as f:
-                    json.dump(metadata, f, indent=2, ensure_ascii=False)
-                logger.info(f"Metadaten gespeichert für {batch_size} Bilder")
-            except Exception as e:
-                logger.error(f"Fehler beim Speichern der Metadaten: {e}", exc_info=True)
-            
-            # Playlists aktualisieren (einmal für alle neuen Bilder im Batch)
-            try:
-                playlist_manager = PlaylistManager(proxy_dir, metadata_file)
+                
+                proxy_dir = Path(self.config.get('paths.proxy_images'))
+                metadata_file = proxy_dir / 'metadata.json'
+                
+                # Lade Metadaten einmal (wird für alle Bilder verwendet)
+                metadata = {}
+                if metadata_file.exists():
+                    try:
+                        with open(metadata_file, 'r', encoding='utf-8') as f:
+                            metadata = json.load(f)
+                    except Exception as e:
+                        logger.error(f"Fehler beim Laden der Metadaten: {e}")
+                        metadata = {}
+                
+                # Verarbeite jedes Bild nacheinander (nicht parallel!)
                 for item in batch:
                     try:
                         original_path = item['original_path']
-                        # Hash aus Proxy-Datei ermitteln
-                        file_hash = self.image_processor._get_file_hash(original_path)
-                        playlist_manager.add_image(file_hash)
+                        uploader_name = item['uploader_name']
+                        
+                        logger.info(f"Verarbeite Bild: {original_path.name}")
+                        
+                        # Proxy erstellen
+                        proxy_path = self.image_processor.process_image(original_path, proxy_dir)
+                        
+                        # EXIF-Daten extrahieren
+                        exif_data = ExifExtractor.extract_all_exif(original_path)
+                        
+                        # Metadaten aktualisieren
+                        image_hash = proxy_path.stem
+                        metadata[image_hash] = {
+                            'sender': uploader_name,
+                            'subject': '',
+                            'date': exif_data.get('date') or datetime.now().isoformat(),
+                            'location': exif_data.get('location'),
+                            'latitude': exif_data.get('latitude'),
+                            'longitude': exif_data.get('longitude'),
+                            'exif_data': exif_data
+                        }
+                        
+                        # Speicherfreigabe nach jedem Bild
+                        import gc
+                        gc.collect()
+                        
                     except Exception as e:
-                        logger.warning(f"Fehler beim Hinzufügen zu Playlist: {e}")
-                logger.info(f"Playlists aktualisiert für {batch_size} Bilder")
-            except Exception as e:
-                logger.warning(f"Fehler beim Aktualisieren der Playlists: {e}")
-            
-            # Cache invalidieren
-            self._images_cache = None
-            self._images_cache_time = None
-            
-            # Explizite Speicherfreigabe nach Batch
-            import gc
-            gc.collect()
-            
+                        logger.error(f"Fehler beim Verarbeiten von {original_path}: {e}", exc_info=True)
+                        continue
+                
+                # Speichere Metadaten einmal für alle Bilder im Batch
+                try:
+                    metadata_file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(metadata_file, 'w', encoding='utf-8') as f:
+                        json.dump(metadata, f, indent=2, ensure_ascii=False)
+                    logger.info(f"Metadaten gespeichert für {batch_size} Bilder")
+                except Exception as e:
+                    logger.error(f"Fehler beim Speichern der Metadaten: {e}", exc_info=True)
+                
+                # Playlists aktualisieren (einmal für alle neuen Bilder im Batch)
+                try:
+                    playlist_manager = PlaylistManager(proxy_dir, metadata_file)
+                    for item in batch:
+                        try:
+                            original_path = item['original_path']
+                            # Hash aus Proxy-Datei ermitteln
+                            file_hash = self.image_processor._get_file_hash(original_path)
+                            playlist_manager.add_image(file_hash)
+                        except Exception as e:
+                            logger.warning(f"Fehler beim Hinzufügen zu Playlist: {e}")
+                    logger.info(f"Playlists aktualisiert für {batch_size} Bilder")
+                except Exception as e:
+                    logger.warning(f"Fehler beim Aktualisieren der Playlists: {e}")
+                
+                # Cache invalidieren
+                self._images_cache = None
+                self._images_cache_time = None
+                
                 logger.info(f"Batch {batch_number} abgeschlossen: {batch_size} Bilder verarbeitet (noch {queue_remaining} in Queue)")
                 
                 # Kurze Pause zwischen Batches (2 Sekunden)
