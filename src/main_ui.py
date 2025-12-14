@@ -3741,12 +3741,6 @@ class MainWindow(QMainWindow):
                 url_label.setWordWrap(True)
                 right_layout.addWidget(url_label)
                 
-                # Hinweis zum Umschalten
-                hint_label = QLabel("(Klicken zum Umschalten)")
-                hint_label.setStyleSheet("font-size: 9px; color: #95a5a6; padding: 2px;")
-                hint_label.setAlignment(Qt.AlignCenter)
-                right_layout.addWidget(hint_label)
-                
                 right_widget = QWidget()
                 right_widget.setLayout(right_layout)
                 layout.addWidget(right_widget)
