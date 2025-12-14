@@ -99,12 +99,14 @@ class WebInterface:
         
         # Prüfe, ob gerade ein Upload läuft - wenn ja, verschiebe Verarbeitung
         with self._upload_in_progress_lock:
-            if self._upload_in_progress:
+            upload_in_progress = self._upload_in_progress
+            if upload_in_progress:
                 logger.info("Upload läuft gerade, verschiebe Verarbeitung...")
                 # Plane Verarbeitung erneut (nach Verzögerung)
                 self._schedule_processing()
                 return
         
+        # Prüfe Queue-Größe
         with self._upload_queue_lock:
             queue_size = len(self._upload_queue)
             if not self._upload_queue:
@@ -229,7 +231,7 @@ class WebInterface:
                         # WICHTIG: Setze Flag VOR dem Starten des Threads zurück
                         # Sonst wird der Thread abgelehnt, weil Flag noch True ist
                         self._is_processing = False
-                        logger.debug("_is_processing Flag zurückgesetzt für nächsten Batch")
+                        logger.info(f"_is_processing Flag zurückgesetzt für nächsten Batch (Queue: {queue_remaining} Bilder)")
                         
                         # Starte nächsten Batch in separatem Thread nach kurzer Pause
                         # (verhindert Stack-Overflow bei vielen Batches)
@@ -237,6 +239,8 @@ class WebInterface:
                             logger.info(f"Thread für nächsten Batch gestartet, warte 2 Sekunden...")
                             time.sleep(2)  # Kurze Pause zwischen Batches
                             logger.info("Starte nächsten Batch jetzt...")
+                            # Prüfe Flag-Status vor Aufruf
+                            logger.debug(f"_is_processing vor Aufruf: {self._is_processing}")
                             self._process_upload_queue()
                         
                         next_batch_thread = threading.Thread(target=start_next_batch, daemon=True)
