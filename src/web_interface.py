@@ -60,17 +60,38 @@ class WebInterface:
     
     def _schedule_processing(self):
         """Plant die Verarbeitung der Upload-Queue (nach Verzögerung)"""
+        with self._upload_queue_lock:
+            queue_size = len(self._upload_queue)
+        
+        if queue_size == 0:
+            logger.debug("Queue ist leer, kein Timer nötig")
+            return
+        
         # Stoppe alten Timer falls vorhanden
         if self._processing_timer:
-            self._processing_timer.cancel()
+            try:
+                self._processing_timer.cancel()
+            except Exception as e:
+                logger.warning(f"Fehler beim Stoppen des alten Timers: {e}")
         
         # Starte neuen Timer (warte auf weitere Uploads)
-        self._processing_timer = threading.Timer(self._processing_delay, self._process_upload_queue)
-        self._processing_timer.daemon = True
-        self._processing_timer.start()
+        logger.info(f"Plane Verarbeitung in {self._processing_delay} Sekunden (Queue: {queue_size} Bilder)")
+        try:
+            self._processing_timer = threading.Timer(self._processing_delay, self._process_upload_queue)
+            self._processing_timer.daemon = True
+            self._processing_timer.start()
+            logger.debug(f"Timer gestartet, wird in {self._processing_delay} Sekunden auslösen")
+        except Exception as e:
+            logger.error(f"Fehler beim Starten des Timers: {e}", exc_info=True)
+            # Fallback: Starte Verarbeitung direkt, wenn Timer nicht startet
+            logger.warning("Fallback: Starte Verarbeitung direkt, da Timer nicht starten konnte")
+            processing_thread = threading.Thread(target=self._process_upload_queue, daemon=True)
+            processing_thread.start()
     
     def _process_upload_queue(self):
         """Verarbeitet Bilder in der Upload-Queue in kleinen Batches"""
+        logger.info("_process_upload_queue() aufgerufen")
+        
         # Verhindere parallele Verarbeitung
         if self._is_processing:
             logger.debug("Verarbeitung läuft bereits, überspringe...")
@@ -85,8 +106,11 @@ class WebInterface:
                 return
         
         with self._upload_queue_lock:
+            queue_size = len(self._upload_queue)
             if not self._upload_queue:
+                logger.info("Upload-Queue ist leer, keine Verarbeitung nötig")
                 return
+            logger.info(f"Starte Verarbeitung: {queue_size} Bilder in Queue")
             
             # Nimm nur einen Batch (max. 5 Bilder)
             batch_size = min(self._processing_batch_size, len(self._upload_queue))
@@ -717,7 +741,9 @@ class WebInterface:
                         logger.info(f"Bild zur Verarbeitungs-Queue hinzugefügt: {original_path.name} (Queue-Größe: {queue_size})")
                     
                     # Timer zurücksetzen (warte auf weitere Uploads - längere Pause)
+                    # WICHTIG: Timer wird bei jedem Upload zurückgesetzt, startet also erst nach letztem Upload
                     self._schedule_processing()
+                    logger.debug(f"Verarbeitung geplant für in {self._processing_delay} Sekunden (nach letztem Upload)")
                 finally:
                     # Upload abgeschlossen - Flag zurücksetzen
                     with self._upload_in_progress_lock:
@@ -832,6 +858,42 @@ class WebInterface:
                 'processing_delay': self._processing_delay,
                 'batch_size': self._processing_batch_size
             })
+        
+        @self.app.route('/api/upload/process', methods=['POST'])
+        def trigger_processing():
+            """Startet die Verarbeitung der Upload-Queue manuell (falls nicht automatisch gestartet)"""
+            with self._upload_queue_lock:
+                queue_size = len(self._upload_queue)
+            
+            if queue_size == 0:
+                return jsonify({
+                    'success': False,
+                    'message': 'Keine Bilder in der Queue'
+                }), 400
+            
+            # Prüfe, ob Verarbeitung bereits läuft
+            if self._is_processing:
+                return jsonify({
+                    'success': False,
+                    'message': 'Verarbeitung läuft bereits'
+                }), 400
+            
+            # Starte Verarbeitung manuell
+            logger.info(f"Manuelle Verarbeitung ausgelöst: {queue_size} Bilder in Queue")
+            try:
+                # Starte Verarbeitung in separatem Thread (nicht blockierend)
+                processing_thread = threading.Thread(target=self._process_upload_queue, daemon=True)
+                processing_thread.start()
+                return jsonify({
+                    'success': True,
+                    'message': f'Verarbeitung gestartet für {queue_size} Bilder'
+                }), 200
+            except Exception as e:
+                logger.error(f"Fehler beim manuellen Start der Verarbeitung: {e}", exc_info=True)
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
         
         @self.app.route('/api/system/info')
         def system_info():
