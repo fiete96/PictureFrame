@@ -241,12 +241,14 @@ class WebInterface:
                             logger.info("Starte nächsten Batch jetzt...")
                             # Prüfe Flag-Status vor Aufruf
                             logger.debug(f"_is_processing vor Aufruf: {self._is_processing}")
+                            # Direkter rekursiver Aufruf (Flag ist bereits False)
                             self._process_upload_queue()
                         
                         next_batch_thread = threading.Thread(target=start_next_batch, daemon=True)
                         next_batch_thread.start()
                         logger.info(f"Thread für nächsten Batch gestartet (Thread-ID: {next_batch_thread.ident})")
-                        # Return hier, damit finally-Block das Flag nicht nochmal zurücksetzt
+                        # WICHTIG: Return hier, damit finally-Block das Flag nicht nochmal zurücksetzt
+                        # (Flag ist bereits False gesetzt)
                         return
         finally:
             # Flag immer zurücksetzen, damit nächster Batch starten kann
@@ -254,6 +256,8 @@ class WebInterface:
             if self._is_processing:
                 self._is_processing = False
                 logger.debug("_is_processing Flag zurückgesetzt im finally-Block")
+            else:
+                logger.debug("_is_processing Flag war bereits False (nächster Batch wurde gestartet)")
     
     def setup_routes(self):
         """Richtet alle Web-Routen ein"""
