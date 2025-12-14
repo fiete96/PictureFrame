@@ -65,33 +65,42 @@ class WebInterface:
         self._processing_timer.start()
     
     def _process_upload_queue(self):
-        """Verarbeitet alle Bilder in der Upload-Queue nacheinander"""
+        """Verarbeitet Bilder in der Upload-Queue in kleinen Batches"""
+        # Verhindere parallele Verarbeitung
+        if self._is_processing:
+            logger.debug("Verarbeitung läuft bereits, überspringe...")
+            return
+        
         with self._upload_queue_lock:
             if not self._upload_queue:
                 return
             
-            # Kopiere Queue und leere sie
-            queue_copy = self._upload_queue.copy()
-            self._upload_queue.clear()
-            queue_size = len(queue_copy)
+            # Nimm nur einen Batch (max. 5 Bilder)
+            batch_size = min(self._processing_batch_size, len(self._upload_queue))
+            batch = self._upload_queue[:batch_size]
+            self._upload_queue = self._upload_queue[batch_size:]
+            queue_remaining = len(self._upload_queue)
         
-        logger.info(f"Starte Verarbeitung von {queue_size} Bildern aus der Queue...")
+        self._is_processing = True
         
-        proxy_dir = Path(self.config.get('paths.proxy_images'))
-        metadata_file = proxy_dir / 'metadata.json'
-        
-        # Lade Metadaten einmal (wird für alle Bilder verwendet)
-        metadata = {}
-        if metadata_file.exists():
-            try:
-                with open(metadata_file, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-            except Exception as e:
-                logger.error(f"Fehler beim Laden der Metadaten: {e}")
-                metadata = {}
-        
-        # Verarbeite jedes Bild nacheinander (nicht parallel!)
-        for item in queue_copy:
+        try:
+            logger.info(f"Verarbeite Batch von {batch_size} Bildern (noch {queue_remaining} in Queue)...")
+            
+            proxy_dir = Path(self.config.get('paths.proxy_images'))
+            metadata_file = proxy_dir / 'metadata.json'
+            
+            # Lade Metadaten einmal (wird für alle Bilder verwendet)
+            metadata = {}
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                except Exception as e:
+                    logger.error(f"Fehler beim Laden der Metadaten: {e}")
+                    metadata = {}
+            
+            # Verarbeite jedes Bild nacheinander (nicht parallel!)
+            for item in batch:
             try:
                 original_path = item['original_path']
                 uploader_name = item['uploader_name']
