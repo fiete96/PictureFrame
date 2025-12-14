@@ -946,18 +946,51 @@ class WebInterface:
                 
                 has_local_changes = bool(status_result.stdout.strip())
                 if has_local_changes:
-                    update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Lokale Änderungen gefunden. Stashe Änderungen...")
-                    stash_result = subprocess.run(
-                        ['git', 'stash', 'push', '-m', f'Auto-stash vor Update {datetime.now().isoformat()}'],
+                    # Prüfe ob es bereits Commits gibt (für stash benötigt)
+                    commit_check = subprocess.run(
+                        ['git', 'rev-parse', '--verify', 'HEAD'],
                         cwd=str(project_dir),
                         capture_output=True,
-                        text=True,
-                        timeout=10
+                        timeout=5
                     )
-                    if stash_result.returncode == 0:
-                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Lokale Änderungen gestasht")
+                    
+                    if commit_check.returncode == 0:
+                        # Commits vorhanden, kann stashen
+                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Lokale Änderungen gefunden. Stashe Änderungen...")
+                        stash_result = subprocess.run(
+                            ['git', 'stash', 'push', '-m', f'Auto-stash vor Update {datetime.now().isoformat()}'],
+                            cwd=str(project_dir),
+                            capture_output=True,
+                            text=True,
+                            timeout=10
+                        )
+                        if stash_result.returncode == 0:
+                            update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Lokale Änderungen gestasht")
+                        else:
+                            update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Stash-Warnung: {stash_result.stderr}")
                     else:
-                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Stash-Warnung: {stash_result.stderr}")
+                        # Keine Commits vorhanden, versuche initialen Commit zu erstellen
+                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Keine Commits vorhanden, erstelle initialen Commit...")
+                        # Füge nur .gitignore hinzu (config.yaml ist ignoriert)
+                        add_result = subprocess.run(
+                            ['git', 'add', '.gitignore'],
+                            cwd=str(project_dir),
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
+                        if add_result.returncode == 0:
+                            commit_result = subprocess.run(
+                                ['git', 'commit', '-m', 'Initial commit: Lokale Installation'],
+                                cwd=str(project_dir),
+                                capture_output=True,
+                                text=True,
+                                timeout=5
+                            )
+                            if commit_result.returncode == 0:
+                                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initialer Commit erstellt")
+                            else:
+                                update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Commit-Warnung: {commit_result.stderr}")
                 
                 # Führe Git Pull aus (explizit origin/main angeben)
                 update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Führe 'git pull origin main' aus...")
@@ -970,13 +1003,33 @@ class WebInterface:
                         timeout=5
                     )
                     
-                    result = subprocess.run(
-                        ['git', 'pull', 'origin', 'main'],
+                    # Prüfe ob bereits Commits vorhanden sind
+                    commit_check = subprocess.run(
+                        ['git', 'rev-parse', '--verify', 'HEAD'],
                         cwd=str(project_dir),
                         capture_output=True,
-                        text=True,
-                        timeout=60
+                        timeout=5
                     )
+                    
+                    if commit_check.returncode == 0:
+                        # Normale Pull-Operation
+                        result = subprocess.run(
+                            ['git', 'pull', 'origin', 'main'],
+                            cwd=str(project_dir),
+                            capture_output=True,
+                            text=True,
+                            timeout=60
+                        )
+                    else:
+                        # Keine Commits vorhanden, verwende --allow-unrelated-histories
+                        update_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Keine lokalen Commits, verwende --allow-unrelated-histories...")
+                        result = subprocess.run(
+                            ['git', 'pull', 'origin', 'main', '--allow-unrelated-histories', '--no-edit'],
+                            cwd=str(project_dir),
+                            capture_output=True,
+                            text=True,
+                            timeout=60
+                        )
                     
                     if result.stdout:
                         update_log.append(f"Git Output:\n{result.stdout}")
