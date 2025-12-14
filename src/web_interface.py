@@ -94,7 +94,7 @@ class WebInterface:
         
         # Verhindere parallele Verarbeitung
         if self._is_processing:
-            logger.debug("Verarbeitung läuft bereits, überspringe...")
+            logger.warning(f"Verarbeitung läuft bereits (_is_processing={self._is_processing}), überspringe...")
             return
         
         # Prüfe, ob gerade ein Upload läuft - wenn ja, verschiebe Verarbeitung
@@ -226,20 +226,30 @@ class WebInterface:
                         self._schedule_processing()
                     else:
                         logger.info(f"Verarbeite nächsten Batch in 2 Sekunden (noch {queue_remaining} Bilder)...")
-                        # Flag wird im finally-Block zurückgesetzt
+                        # WICHTIG: Setze Flag VOR dem Starten des Threads zurück
+                        # Sonst wird der Thread abgelehnt, weil Flag noch True ist
+                        self._is_processing = False
+                        logger.debug("_is_processing Flag zurückgesetzt für nächsten Batch")
+                        
                         # Starte nächsten Batch in separatem Thread nach kurzer Pause
                         # (verhindert Stack-Overflow bei vielen Batches)
                         def start_next_batch():
+                            logger.info(f"Thread für nächsten Batch gestartet, warte 2 Sekunden...")
                             time.sleep(2)  # Kurze Pause zwischen Batches
+                            logger.info("Starte nächsten Batch jetzt...")
                             self._process_upload_queue()
                         
                         next_batch_thread = threading.Thread(target=start_next_batch, daemon=True)
                         next_batch_thread.start()
-                        logger.debug("Thread für nächsten Batch gestartet")
+                        logger.info(f"Thread für nächsten Batch gestartet (Thread-ID: {next_batch_thread.ident})")
+                        # Return hier, damit finally-Block das Flag nicht nochmal zurücksetzt
+                        return
         finally:
             # Flag immer zurücksetzen, damit nächster Batch starten kann
-            self._is_processing = False
-            logger.debug("_is_processing Flag zurückgesetzt")
+            # (nur wenn nicht bereits zurückgesetzt für nächsten Batch)
+            if self._is_processing:
+                self._is_processing = False
+                logger.debug("_is_processing Flag zurückgesetzt im finally-Block")
     
     def setup_routes(self):
         """Richtet alle Web-Routen ein"""
