@@ -221,13 +221,25 @@ class WebInterface:
                 with self._upload_in_progress_lock:
                     if self._upload_in_progress:
                         logger.info("Upload läuft während Verarbeitung, verschiebe nächsten Batch...")
-                        self._schedule_processing()  # Plane Verarbeitung erneut
+                        # Flag wird im finally-Block zurückgesetzt
+                        # Plane Verarbeitung erneut (nach Verzögerung)
+                        self._schedule_processing()
                     else:
-                        logger.info(f"Verarbeite nächsten Batch in 2 Sekunden...")
-                        time.sleep(2)  # Kurze Pause zwischen Batches
-                        self._process_upload_queue()  # Rekursiver Aufruf für nächsten Batch
+                        logger.info(f"Verarbeite nächsten Batch in 2 Sekunden (noch {queue_remaining} Bilder)...")
+                        # Flag wird im finally-Block zurückgesetzt
+                        # Starte nächsten Batch in separatem Thread nach kurzer Pause
+                        # (verhindert Stack-Overflow bei vielen Batches)
+                        def start_next_batch():
+                            time.sleep(2)  # Kurze Pause zwischen Batches
+                            self._process_upload_queue()
+                        
+                        next_batch_thread = threading.Thread(target=start_next_batch, daemon=True)
+                        next_batch_thread.start()
+                        logger.debug("Thread für nächsten Batch gestartet")
         finally:
+            # Flag immer zurücksetzen, damit nächster Batch starten kann
             self._is_processing = False
+            logger.debug("_is_processing Flag zurückgesetzt")
     
     def setup_routes(self):
         """Richtet alle Web-Routen ein"""
