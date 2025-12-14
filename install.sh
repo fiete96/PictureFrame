@@ -49,6 +49,20 @@ echo "Setze Berechtigungen..."
 chmod +x src/main.py
 chmod +x setup_bootscreen.sh
 
+# Git-Repository einrichten (falls noch nicht vorhanden)
+echo "Richte Git-Repository ein..."
+if [ ! -d .git ]; then
+    git init
+    git remote add origin https://github.com/fiete96/PictureFrame.git 2>/dev/null || echo "Remote bereits vorhanden oder Fehler"
+    git fetch origin main 2>/dev/null || echo "Fetch fehlgeschlagen (normal wenn Repository leer ist)"
+    git branch -M main 2>/dev/null
+    git branch --set-upstream-to=origin/main main 2>/dev/null || echo "Upstream-Branch konnte nicht gesetzt werden"
+    echo "Git-Repository initialisiert"
+else
+    echo "Git-Repository bereits vorhanden"
+    git remote set-url origin https://github.com/fiete96/PictureFrame.git 2>/dev/null || echo "Remote konnte nicht gesetzt werden"
+fi
+
 # Installiere Systemd-Service (optional)
 read -p "Möchten Sie den Systemd-Service installieren? (j/n) " -n 1 -r
 echo
