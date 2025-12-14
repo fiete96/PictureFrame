@@ -22,6 +22,7 @@ from exif_extractor import ExifExtractor
 from playlist_manager import PlaylistManager
 import threading
 import time
+import queue
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,8 @@ class WebInterface:
         self._upload_queue_lock = threading.Lock()
         self._processing_timer = None
         self._processing_delay = 5.0  # 5 Sekunden warten nach letztem Upload
+        self._processing_batch_size = 5  # Max. 5 Bilder auf einmal verarbeiten
+        self._is_processing = False  # Flag um parallele Verarbeitung zu verhindern
         
         self.setup_routes()
     
@@ -101,71 +104,90 @@ class WebInterface:
             
             # Verarbeite jedes Bild nacheinander (nicht parallel!)
             for item in batch:
-            try:
-                original_path = item['original_path']
-                uploader_name = item['uploader_name']
-                
-                logger.info(f"Verarbeite Bild: {original_path.name}")
-                
-                # Proxy erstellen
-                proxy_path = self.image_processor.process_image(original_path, proxy_dir)
-                
-                # EXIF-Daten extrahieren
-                exif_data = ExifExtractor.extract_all_exif(original_path)
-                
-                # Metadaten aktualisieren
-                image_hash = proxy_path.stem
-                metadata[image_hash] = {
-                    'sender': uploader_name,
-                    'subject': '',
-                    'date': exif_data.get('date') or datetime.now().isoformat(),
-                    'location': exif_data.get('location'),
-                    'latitude': exif_data.get('latitude'),
-                    'longitude': exif_data.get('longitude'),
-                    'exif_data': exif_data
-                }
-                
-                # Speicherfreigabe nach jedem Bild
-                import gc
-                gc.collect()
-                
-            except Exception as e:
-                logger.error(f"Fehler beim Verarbeiten von {original_path}: {e}", exc_info=True)
-                continue
-        
-        # Speichere Metadaten einmal für alle Bilder
-        try:
-            metadata_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
-            logger.info(f"Metadaten gespeichert für {queue_size} Bilder")
-        except Exception as e:
-            logger.error(f"Fehler beim Speichern der Metadaten: {e}", exc_info=True)
-        
-        # Playlists aktualisieren (einmal für alle neuen Bilder)
-        try:
-            playlist_manager = PlaylistManager(proxy_dir, metadata_file)
-            for item in queue_copy:
                 try:
                     original_path = item['original_path']
-                    # Hash aus Proxy-Datei ermitteln
-                    file_hash = self.image_processor._get_file_hash(original_path)
-                    playlist_manager.add_image(file_hash)
+                    uploader_name = item['uploader_name']
+                    
+                    logger.info(f"Verarbeite Bild: {original_path.name}")
+                    
+                    # Proxy erstellen
+                    proxy_path = self.image_processor.process_image(original_path, proxy_dir)
+                    
+                    # EXIF-Daten extrahieren
+                    exif_data = ExifExtractor.extract_all_exif(original_path)
+                    
+                    # Metadaten aktualisieren
+                    image_hash = proxy_path.stem
+                    metadata[image_hash] = {
+                        'sender': uploader_name,
+                        'subject': '',
+                        'date': exif_data.get('date') or datetime.now().isoformat(),
+                        'location': exif_data.get('location'),
+                        'latitude': exif_data.get('latitude'),
+                        'longitude': exif_data.get('longitude'),
+                        'exif_data': exif_data
+                    }
+                    
+                    # Speicherfreigabe nach jedem Bild
+                    import gc
+                    gc.collect()
+                    
                 except Exception as e:
-                    logger.warning(f"Fehler beim Hinzufügen zu Playlist: {e}")
-            logger.info(f"Playlists aktualisiert für {queue_size} Bilder")
-        except Exception as e:
-            logger.warning(f"Fehler beim Aktualisieren der Playlists: {e}")
-        
-        # Cache invalidieren
-        self._images_cache = None
-        self._images_cache_time = None
-        
-        # Finale Speicherfreigabe
-        import gc
-        gc.collect()
-        
-        logger.info(f"Verarbeitung abgeschlossen: {queue_size} Bilder verarbeitet")
+                    logger.error(f"Fehler beim Verarbeiten von {original_path}: {e}", exc_info=True)
+                    continue
+            
+            # Speichere Metadaten einmal für alle Bilder im Batch
+            try:
+                metadata_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(metadata_file, 'w', encoding='utf-8') as f:
+                    json.dump(metadata, f, indent=2, ensure_ascii=False)
+                logger.info(f"Metadaten gespeichert für {batch_size} Bilder")
+            except Exception as e:
+                logger.error(f"Fehler beim Speichern der Metadaten: {e}", exc_info=True)
+            
+            # Playlists aktualisieren (einmal für alle neuen Bilder im Batch)
+            try:
+                playlist_manager = PlaylistManager(proxy_dir, metadata_file)
+                for item in batch:
+                    try:
+                        original_path = item['original_path']
+                        # Hash aus Proxy-Datei ermitteln
+                        file_hash = self.image_processor._get_file_hash(original_path)
+                        playlist_manager.add_image(file_hash)
+                    except Exception as e:
+                        logger.warning(f"Fehler beim Hinzufügen zu Playlist: {e}")
+                logger.info(f"Playlists aktualisiert für {batch_size} Bilder")
+            except Exception as e:
+                logger.warning(f"Fehler beim Aktualisieren der Playlists: {e}")
+            
+            # Cache invalidieren
+            self._images_cache = None
+            self._images_cache_time = None
+            
+            # Explizite Speicherfreigabe nach Batch
+            import gc
+            gc.collect()
+            
+            logger.info(f"Verarbeitung von {batch_size} Bildern abgeschlossen (noch {queue_remaining} in Queue).")
+            
+            # Signalisiere GUI, dass neue Bilder vorhanden sind (nur wenn Queue leer ist)
+            if queue_remaining == 0:
+                if self.settings_queue:
+                    try:
+                        self.settings_queue.put('reload_settings', block=False)
+                        logger.info("Reload-Signal an GUI gesendet nach Upload-Verarbeitung")
+                    except queue.Full:
+                        logger.warning("Settings-Queue voll, überspringe Reload-Signal")
+                    except Exception as e:
+                        logger.error(f"Fehler beim Senden des Reload-Signals nach Upload: {e}")
+            
+            # Wenn noch Bilder in der Queue sind, verarbeite den nächsten Batch
+            if queue_remaining > 0:
+                logger.info(f"Verarbeite nächsten Batch in 2 Sekunden...")
+                time.sleep(2)  # Kurze Pause zwischen Batches
+                self._process_upload_queue()  # Rekursiver Aufruf für nächsten Batch
+        finally:
+            self._is_processing = False
     
     def setup_routes(self):
         """Richtet alle Web-Routen ein"""
