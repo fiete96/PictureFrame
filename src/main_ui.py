@@ -814,7 +814,11 @@ class SlideshowWidget(QWidget):
         painter.drawPixmap(int(x), int(y), scaled_pixmap)
         painter.end()
         
+        logger.debug(f"update_displayed_image: Setze Pixmap auf image_label (Größe: {display_pixmap.width()}x{display_pixmap.height()})")
         self.image_label.setPixmap(display_pixmap)
+        # Stelle sicher, dass Label aktualisiert wird
+        self.image_label.update()
+        self.image_label.repaint()
     
     def show_placeholder(self):
         """Zeigt einen Platzhalter, wenn keine Bilder vorhanden sind"""
