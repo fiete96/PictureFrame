@@ -373,14 +373,17 @@ class SlideshowWidget(QWidget):
     def _on_fade_finished(self):
         """Wird aufgerufen, wenn Fade-Animation abgeschlossen ist"""
         try:
-            logger.debug("Fade-Animation abgeschlossen")
+            logger.info("Fade-Animation abgeschlossen - wechsle Bild")
             # Wechsle die Labels: nächstes Bild wird aktuelles Bild
             if self.next_pixmap and not self.next_pixmap.isNull():
+                logger.info(f"Fade: Wechsle zu next_pixmap (vorher: {self.original_pixmap is not None})")
                 self.original_pixmap = self.next_pixmap
                 self.reset_zoom()
                 self.update_displayed_image()
                 self.update_info_label()
-                logger.debug("Bild nach Fade aktualisiert")
+                logger.info("Bild nach Fade aktualisiert")
+            else:
+                logger.warning("Fade: next_pixmap ist None oder ungültig")
             
             # Verstecke nächstes Bild-Label
             self.next_image_label.hide()
