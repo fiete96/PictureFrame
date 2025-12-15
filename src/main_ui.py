@@ -829,16 +829,26 @@ class SlideshowWidget(QWidget):
     def on_timer_timeout(self):
         """Wird aufgerufen, wenn der Timer abläuft"""
         try:
+            logger.info("Slideshow-Timer: on_timer_timeout() aufgerufen")
             if not self.is_paused:  # Nur wenn nicht pausiert
                 # Prüfe ob Bilder vorhanden sind
                 image_count = self.slideshow.get_image_count()
+                logger.info(f"Slideshow-Timer: {image_count} Bilder vorhanden, aktueller Index: {self.slideshow.current_index}")
                 if image_count == 0:
                     logger.warning("Slideshow-Timer: Keine Bilder vorhanden")
                     return
                 
-                self.slideshow.next_image()
-                self.load_current_image(use_fade=True)  # Fade-Übergang bei automatischem Wechsel
-                logger.debug(f"Slideshow: Nächstes Bild geladen (Bild {self.slideshow.current_index + 1}/{image_count})")
+                # Wechsle zum nächsten Bild
+                next_path = self.slideshow.next_image()
+                logger.info(f"Slideshow-Timer: Nächstes Bild: {next_path.name if next_path else 'None'} (Index: {self.slideshow.current_index})")
+                
+                if next_path:
+                    self.load_current_image(use_fade=True)  # Fade-Übergang bei automatischem Wechsel
+                    logger.info(f"Slideshow: Bild gewechselt zu {next_path.name} (Bild {self.slideshow.current_index + 1}/{image_count})")
+                else:
+                    logger.warning("Slideshow-Timer: next_image() gab None zurück")
+            else:
+                logger.debug("Slideshow-Timer: Slideshow ist pausiert")
         except Exception as e:
             logger.error(f"Fehler im Slideshow-Timer: {e}", exc_info=True)
             # Versuche Timer neu zu starten
@@ -855,12 +865,19 @@ class SlideshowWidget(QWidget):
         """Watchdog: Prüft ob der Slideshow-Timer noch läuft und startet ihn bei Bedarf neu"""
         try:
             auto_play = self.config.get('slideshow.auto_play', True)
+            timer_active = self.timer.isActive() if hasattr(self, 'timer') else False
+            logger.info(f"Watchdog: Timer-Status - auto_play={auto_play}, is_paused={self.is_paused}, timer_active={timer_active}")
+            
             if auto_play and not self.is_paused:
-                if not self.timer.isActive():
+                if not timer_active:
                     logger.warning("Watchdog: Slideshow-Timer war gestoppt, starte neu...")
                     interval = self.config.get('slideshow.interval_seconds', 10) * 1000
                     self.timer.start(interval)
                     logger.info(f"Watchdog: Timer neu gestartet mit Intervall: {interval/1000}s")
+                else:
+                    logger.debug(f"Watchdog: Timer läuft korrekt (Intervall: {self.timer.interval()/1000}s)")
+            else:
+                logger.debug(f"Watchdog: Timer sollte nicht laufen (auto_play={auto_play}, is_paused={self.is_paused})")
         except Exception as e:
             logger.error(f"Fehler im Watchdog-Timer: {e}", exc_info=True)
     
