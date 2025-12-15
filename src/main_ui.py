@@ -231,6 +231,7 @@ class SlideshowWidget(QWidget):
         """Lädt das aktuelle Bild aus der Slideshow mit optionalem Fade-Übergang"""
         image_path = self.slideshow.get_current_image()
         if image_path and image_path.exists():
+            logger.info(f"Lade Bild: {image_path.name}")
             # Lade Bild (optimiert: verwende load() mit Format für bessere Performance)
             new_pixmap = QPixmap()
             # Lade Bild mit optimierten Optionen (schnelleres Laden)
@@ -243,11 +244,15 @@ class SlideshowWidget(QWidget):
             transition_duration = self.config.get('slideshow.transition_duration', 1.0)
             use_fade = use_fade and transition_duration > 0 and not self.is_fading
             
+            logger.info(f"Bild geladen: {image_path.name}, use_fade={use_fade}, is_fading={self.is_fading}")
+            
             if use_fade and self.original_pixmap and not self.original_pixmap.isNull():
                 # Fade-Übergang verwenden
+                logger.debug(f"Starte Fade-Übergang zu {image_path.name}")
                 self._fade_to_new_image(new_pixmap, transition_duration)
             else:
                 # Sofortiger Wechsel (kein Fade)
+                logger.debug(f"Sofortiger Wechsel zu {image_path.name}")
                 self.original_pixmap = new_pixmap
                 # Reset Zoom und Pan beim Bildwechsel
                 self.reset_zoom()
@@ -256,8 +261,13 @@ class SlideshowWidget(QWidget):
                 # Verstecke Info-Bar beim Bildwechsel
                 if self.info_bar_visible:
                     self.hide_info_bar()
+                # Stelle sicher, dass Widget aktualisiert wird
+                self.update()
+                if QApplication.instance():
+                    QApplication.instance().processEvents()
         else:
             # Platzhalter anzeigen
+            logger.warning(f"Bild nicht gefunden: {image_path}")
             self.show_placeholder()
     
     def _fade_to_new_image(self, new_pixmap: QPixmap, duration: float):
@@ -358,12 +368,14 @@ class SlideshowWidget(QWidget):
     def _on_fade_finished(self):
         """Wird aufgerufen, wenn Fade-Animation abgeschlossen ist"""
         try:
+            logger.debug("Fade-Animation abgeschlossen")
             # Wechsle die Labels: nächstes Bild wird aktuelles Bild
             if self.next_pixmap and not self.next_pixmap.isNull():
                 self.original_pixmap = self.next_pixmap
                 self.reset_zoom()
                 self.update_displayed_image()
                 self.update_info_label()
+                logger.debug("Bild nach Fade aktualisiert")
             
             # Verstecke nächstes Bild-Label
             self.next_image_label.hide()
@@ -372,6 +384,11 @@ class SlideshowWidget(QWidget):
             # Verstecke Info-Bar beim Bildwechsel
             if self.info_bar_visible:
                 self.hide_info_bar()
+            
+            # Stelle sicher, dass Widget aktualisiert wird
+            self.update()
+            if QApplication.instance():
+                QApplication.instance().processEvents()
         except Exception as e:
             logger.error(f"Fehler beim Abschließen des Fade-Übergangs: {e}", exc_info=True)
         finally:
