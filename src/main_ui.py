@@ -248,7 +248,7 @@ class SlideshowWidget(QWidget):
             
             if use_fade and self.original_pixmap and not self.original_pixmap.isNull():
                 # Fade-Übergang verwenden
-                logger.debug(f"Starte Fade-Übergang zu {image_path.name}")
+                logger.info(f"Starte Fade-Übergang zu {image_path.name} (Dauer: {transition_duration}s)")
                 self._fade_to_new_image(new_pixmap, transition_duration)
             else:
                 # Sofortiger Wechsel (kein Fade)
@@ -273,8 +273,10 @@ class SlideshowWidget(QWidget):
     def _fade_to_new_image(self, new_pixmap: QPixmap, duration: float):
         """Führt einen Fade-Übergang zum neuen Bild durch"""
         try:
+            logger.info(f"_fade_to_new_image aufgerufen, duration={duration}s")
             if self.is_fading:
                 # Wenn bereits ein Fade läuft, stoppe ihn und wechsle sofort
+                logger.warning("Fade bereits aktiv, stoppe alten Fade und wechsle sofort")
                 if self.fade_animation:
                     self.fade_animation.stop()
                     self.fade_animation.deleteLater()
@@ -286,6 +288,7 @@ class SlideshowWidget(QWidget):
             
             self.is_fading = True
             self.next_pixmap = new_pixmap
+            logger.info("Fade: next_pixmap gesetzt, bereite Bild vor...")
             
             # Bereite nächstes Bild vor
             self._prepare_next_image(new_pixmap)
@@ -315,7 +318,9 @@ class SlideshowWidget(QWidget):
             self.fade_animation.finished.connect(self._on_fade_finished)
             
             # Starte Animation
+            logger.info(f"Fade: Starte Animation (Dauer: {duration}s)")
             self.fade_animation.start()
+            logger.info("Fade: Animation gestartet")
         except Exception as e:
             logger.error(f"Fehler beim Starten des Fade-Übergangs: {e}", exc_info=True)
             # Fallback: sofortiger Wechsel
