@@ -68,14 +68,44 @@ def main():
     # Prüfe ob bereits eine Instanz läuft
     import fcntl
     lock_file = Path("/tmp/pictureframe.lock")
+    
+    # Prüfe zuerst, ob Lock-File existiert und ob die PID noch läuft
+    if lock_file.exists():
+        try:
+            with open(lock_file, 'r') as f:
+                old_pid = int(f.read().strip())
+            # Prüfe ob Prozess noch läuft
+            try:
+                os.kill(old_pid, 0)  # Signal 0 prüft nur Existenz
+                # Prozess läuft noch
+                logger.warning(f"Eine andere Instanz von PictureFrame läuft bereits (PID: {old_pid}). Beende.")
+                sys.exit(1)  # Exit-Code 1 = Fehler, damit Systemd nicht bei Restart=always neu startet
+            except ProcessLookupError:
+                # Prozess existiert nicht mehr, Lock-File ist veraltet
+                logger.info(f"Altes Lock-File gefunden (PID: {old_pid}), aber Prozess läuft nicht mehr. Lösche Lock-File.")
+                lock_file.unlink()
+            except PermissionError:
+                # Keine Berechtigung, aber Prozess existiert wahrscheinlich
+                logger.warning(f"Eine andere Instanz von PictureFrame läuft möglicherweise (PID: {old_pid}). Beende.")
+                sys.exit(1)
+        except (ValueError, IOError):
+            # Lock-File ist ungültig, lösche es
+            logger.info("Ungültiges Lock-File gefunden, lösche es.")
+            try:
+                lock_file.unlink()
+            except:
+                pass
+    
+    # Versuche Lock zu erstellen
     try:
         lock_fd = open(lock_file, 'w')
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         lock_fd.write(str(os.getpid()))
         lock_fd.flush()
+        # Datei nicht schließen, damit Lock erhalten bleibt
     except IOError:
-        logger.warning("Eine andere Instanz von PictureFrame läuft bereits. Beende.")
-        sys.exit(0)
+        logger.warning("Konnte Lock-File nicht erstellen. Eine andere Instanz läuft möglicherweise. Beende.")
+        sys.exit(1)  # Exit-Code 1 = Fehler
     
     try:
         # Konfiguration laden
