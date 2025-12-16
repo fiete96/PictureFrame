@@ -79,7 +79,7 @@ def main():
                 os.kill(old_pid, 0)  # Signal 0 prüft nur Existenz
                 # Prozess läuft noch
                 logger.warning(f"Eine andere Instanz von PictureFrame läuft bereits (PID: {old_pid}). Beende.")
-                sys.exit(1)  # Exit-Code 1 = Fehler, damit Systemd nicht bei Restart=always neu startet
+                sys.exit(0)  # Exit-Code 0 = Erfolg, keine weitere Aktion nötig (mit Restart=on-failure wird nicht neu gestartet)
             except ProcessLookupError:
                 # Prozess existiert nicht mehr, Lock-File ist veraltet
                 logger.info(f"Altes Lock-File gefunden (PID: {old_pid}), aber Prozess läuft nicht mehr. Lösche Lock-File.")
@@ -87,7 +87,7 @@ def main():
             except PermissionError:
                 # Keine Berechtigung, aber Prozess existiert wahrscheinlich
                 logger.warning(f"Eine andere Instanz von PictureFrame läuft möglicherweise (PID: {old_pid}). Beende.")
-                sys.exit(1)
+                sys.exit(0)  # Exit-Code 0 = Erfolg, keine weitere Aktion nötig
         except (ValueError, IOError):
             # Lock-File ist ungültig, lösche es
             logger.info("Ungültiges Lock-File gefunden, lösche es.")
@@ -105,7 +105,7 @@ def main():
         # Datei nicht schließen, damit Lock erhalten bleibt
     except IOError:
         logger.warning("Konnte Lock-File nicht erstellen. Eine andere Instanz läuft möglicherweise. Beende.")
-        sys.exit(1)  # Exit-Code 1 = Fehler
+        sys.exit(0)  # Exit-Code 0 = Erfolg, keine weitere Aktion nötig (mit Restart=on-failure wird nicht neu gestartet)
     
     try:
         # Konfiguration laden
