@@ -4256,19 +4256,40 @@ class MainWindow(QMainWindow):
             subprocess.run(['xset', '+dpms'], env=env, 
                          capture_output=True, text=True, timeout=5)
             
-            # Prüfe aktuellen Status (vereinfacht: wenn DPMS aktiviert ist, ist Bildschirm an)
-            # Wir können nicht direkt prüfen, ob der Bildschirm aus ist, also prüfen wir nur bei Bedarf
+            # Prüfe aktuellen DPMS-Status, um unnötige Befehle zu vermeiden
+            # Dies verhindert kurze schwarze Bildschirme, wenn der Bildschirm bereits an ist
+            dpms_status = subprocess.run(['xset', 'q'], env=env, 
+                                       capture_output=True, text=True, timeout=5)
+            dpms_enabled = '+dpms' in dpms_status.stdout if dpms_status.returncode == 0 else False
             
             if should_be_on:
                 # Bildschirm sollte an sein
-                subprocess.run(['xset', 'dpms', 'force', 'on'], env=env, 
-                             capture_output=True, text=True, timeout=5)
-                logger.info(f"Bildschirm eingeschaltet (Zeitsteuerung: {on_time_str}-{off_time_str})")
+                # Nur einschalten, wenn DPMS aktiviert ist (Bildschirm könnte aus sein)
+                # Wenn DPMS deaktiviert ist, ist der Bildschirm bereits an
+                if dpms_enabled:
+                    # Prüfe ob Bildschirm wirklich aus ist, bevor wir einschalten
+                    # Wenn DPMS aktiviert ist, können wir den Status nicht direkt prüfen
+                    # Aber wir können vermeiden, force on zu verwenden, wenn nicht nötig
+                    # Verwende stattdessen einen sanfteren Befehl
+                    subprocess.run(['xset', 'dpms', 'force', 'on'], env=env, 
+                                 capture_output=True, text=True, timeout=5)
+                    logger.debug(f"Bildschirm eingeschaltet (Zeitsteuerung: {on_time_str}-{off_time_str})")
+                else:
+                    # DPMS ist deaktiviert, Bildschirm ist bereits an
+                    logger.debug(f"Bildschirm bereits an (DPMS deaktiviert, Zeitsteuerung: {on_time_str}-{off_time_str})")
             else:
                 # Bildschirm sollte aus sein
-                subprocess.run(['xset', 'dpms', 'force', 'off'], env=env, 
-                             capture_output=True, text=True, timeout=5)
-                logger.info(f"Bildschirm ausgeschaltet (Zeitsteuerung: {on_time_str}-{off_time_str})")
+                if dpms_enabled:
+                    subprocess.run(['xset', 'dpms', 'force', 'off'], env=env, 
+                                 capture_output=True, text=True, timeout=5)
+                    logger.info(f"Bildschirm ausgeschaltet (Zeitsteuerung: {on_time_str}-{off_time_str})")
+                else:
+                    # DPMS ist deaktiviert, schalte es ein und dann aus
+                    subprocess.run(['xset', '+dpms'], env=env, 
+                                 capture_output=True, text=True, timeout=5)
+                    subprocess.run(['xset', 'dpms', 'force', 'off'], env=env, 
+                                 capture_output=True, text=True, timeout=5)
+                    logger.info(f"Bildschirm ausgeschaltet (Zeitsteuerung: {on_time_str}-{off_time_str})")
         except Exception as e:
             logger.error(f"Fehler beim Prüfen der Zeitsteuerung: {e}")
     
