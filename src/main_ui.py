@@ -4264,22 +4264,26 @@ class MainWindow(QMainWindow):
             
             if should_be_on:
                 # Bildschirm sollte an sein
-                # Nur einschalten, wenn DPMS aktiviert ist (Bildschirm könnte aus sein)
-                # Wenn DPMS deaktiviert ist, ist der Bildschirm bereits an
-                if dpms_enabled:
-                    # Prüfe ob Bildschirm wirklich aus ist, bevor wir einschalten
-                    # Wenn DPMS aktiviert ist, können wir den Status nicht direkt prüfen
-                    # Aber wir können vermeiden, force on zu verwenden, wenn nicht nötig
-                    # Verwende stattdessen einen sanfteren Befehl
-                    result = subprocess.run(['xset', 'dpms', 'force', 'on'], env=env, 
+                # Aktiviere DPMS falls nötig und schalte Bildschirm ein
+                # Auch wenn DPMS deaktiviert war, aktivieren wir es für die Zeitsteuerung
+                subprocess.run(['xset', '+dpms'], env=env, 
+                             capture_output=True, text=True, timeout=5)
+                
+                # Schalte Bildschirm ein
+                result = subprocess.run(['xset', 'dpms', 'force', 'on'], env=env, 
                                  capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0:
-                        logger.info(f"Bildschirm eingeschaltet (Zeitsteuerung: {on_time_str}-{off_time_str})")
-                    else:
-                        logger.warning(f"Fehler beim Einschalten des Bildschirms: {result.stderr}")
+                if result.returncode == 0:
+                    logger.info(f"Bildschirm eingeschaltet (Zeitsteuerung: {on_time_str}-{off_time_str})")
                 else:
-                    # DPMS ist deaktiviert, Bildschirm ist bereits an
-                    logger.debug(f"Bildschirm bereits an (DPMS deaktiviert, Zeitsteuerung: {on_time_str}-{off_time_str})")
+                    logger.warning(f"Fehler beim Einschalten des Bildschirms: {result.stderr}")
+                    # Fallback: Versuche mit xset -dpms und dann wieder +dpms
+                    subprocess.run(['xset', '-dpms'], env=env, 
+                                 capture_output=True, text=True, timeout=5)
+                    subprocess.run(['xset', '+dpms'], env=env, 
+                                 capture_output=True, text=True, timeout=5)
+                    subprocess.run(['xset', 'dpms', 'force', 'on'], env=env, 
+                                 capture_output=True, text=True, timeout=5)
+                    logger.info(f"Bildschirm eingeschaltet (Fallback-Methode)")
             else:
                 # Bildschirm sollte aus sein
                 if dpms_enabled:
