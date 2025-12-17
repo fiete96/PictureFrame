@@ -78,8 +78,30 @@ def main():
             try:
                 os.kill(old_pid, 0)  # Signal 0 prüft nur Existenz
                 # Prozess läuft noch
-                logger.warning(f"Eine andere Instanz von PictureFrame läuft bereits (PID: {old_pid}). Beende.")
-                sys.exit(0)  # Exit-Code 0 = Erfolg, keine weitere Aktion nötig (mit Restart=on-failure wird nicht neu gestartet)
+                # Prüfe ob wir von Systemd gestartet wurden (dann sollten wir die alte Instanz beenden)
+                if os.environ.get('INVOCATION_ID'):
+                    # Wir wurden von Systemd gestartet - beende die alte Instanz
+                    logger.info(f"Alte Instanz (PID: {old_pid}) läuft noch, beende sie...")
+                    try:
+                        os.kill(old_pid, 15)  # SIGTERM
+                        import time
+                        time.sleep(2)
+                        # Prüfe ob Prozess noch läuft
+                        try:
+                            os.kill(old_pid, 0)
+                            # Läuft noch, verwende SIGKILL
+                            logger.warning(f"Alte Instanz reagiert nicht auf SIGTERM, verwende SIGKILL...")
+                            os.kill(old_pid, 9)  # SIGKILL
+                            time.sleep(1)
+                        except ProcessLookupError:
+                            logger.info(f"Alte Instanz erfolgreich beendet")
+                    except Exception as e:
+                        logger.error(f"Fehler beim Beenden der alten Instanz: {e}")
+                        sys.exit(1)  # Fehler, damit Systemd neu startet
+                else:
+                    # Nicht von Systemd gestartet - beende diese Instanz
+                    logger.warning(f"Eine andere Instanz von PictureFrame läuft bereits (PID: {old_pid}). Beende.")
+                    sys.exit(0)  # Exit-Code 0 = Erfolg, keine weitere Aktion nötig
             except ProcessLookupError:
                 # Prozess existiert nicht mehr, Lock-File ist veraltet
                 logger.info(f"Altes Lock-File gefunden (PID: {old_pid}), aber Prozess läuft nicht mehr. Lösche Lock-File.")
