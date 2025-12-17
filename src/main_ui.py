@@ -4247,18 +4247,13 @@ class MainWindow(QMainWindow):
             # Prüfe ob wir im Zeitfenster zwischen Einschalt- und Ausschaltzeit sind
             if on_time_minutes < off_time_minutes:
                 # Normaler Fall: z.B. 08:00 - 22:00
+                # Bildschirm ist AN zwischen Einschalt- und Ausschaltzeit
                 should_be_on = on_time_minutes <= current_time_minutes < off_time_minutes
             else:
-                # Über Mitternacht: z.B. 22:00 - 08:00
-                # Aber: Wenn Ausschaltzeit nur wenige Minuten vor Einschaltzeit ist, ist das wahrscheinlich ein Fehler
-                if off_time_minutes < on_time_minutes - 60:  # Mehr als 1 Stunde Unterschied = über Mitternacht
-                    should_be_on = current_time_minutes >= on_time_minutes or current_time_minutes < off_time_minutes
-                else:
-                    # Wahrscheinlich ein Konfigurationsfehler (z.B. 15:36 - 15:34)
-                    logger.warning(f"Ungültige Zeitsteuerung: Ausschaltzeit ({off_time_str}) ist vor Einschaltzeit ({on_time_str}). "
-                                 f"Interpretiere als: Bildschirm sollte zwischen {on_time_str} und {off_time_str} AUS sein.")
-                    # Invertiere Logik: Bildschirm sollte zwischen Ausschalt- und Einschaltzeit AUS sein
-                    should_be_on = not (off_time_minutes <= current_time_minutes < on_time_minutes)
+                # Über Mitternacht: z.B. 15:36 - 15:34 (Einschaltung um 15:36, Ausschaltung um 15:34 am nächsten Tag)
+                # Bildschirm ist AN von Einschaltzeit bis Mitternacht UND von Mitternacht bis Ausschaltzeit
+                should_be_on = current_time_minutes >= on_time_minutes or current_time_minutes < off_time_minutes
+                logger.debug(f"Zeitsteuerung über Mitternacht: Einschaltung {on_time_str}, Ausschaltung {off_time_str} (nächster Tag)")
             
             # Für zeitgesteuerte Ein/Ausschaltung muss DPMS aktiviert sein
             # Aktiviere DPMS temporär, falls es deaktiviert ist
