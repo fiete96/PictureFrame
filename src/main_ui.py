@@ -4241,6 +4241,7 @@ class MainWindow(QMainWindow):
             # Prüfe ob Bildschirm ein- oder ausgeschaltet werden soll
             if on_time_minutes == off_time_minutes:
                 # Gleiche Zeiten = deaktiviert
+                logger.warning(f"Zeitsteuerung deaktiviert: Einschalt- und Ausschaltzeit sind gleich ({on_time_str})")
                 return
             
             # Prüfe ob wir im Zeitfenster zwischen Einschalt- und Ausschaltzeit sind
@@ -4249,7 +4250,15 @@ class MainWindow(QMainWindow):
                 should_be_on = on_time_minutes <= current_time_minutes < off_time_minutes
             else:
                 # Über Mitternacht: z.B. 22:00 - 08:00
-                should_be_on = current_time_minutes >= on_time_minutes or current_time_minutes < off_time_minutes
+                # Aber: Wenn Ausschaltzeit nur wenige Minuten vor Einschaltzeit ist, ist das wahrscheinlich ein Fehler
+                if off_time_minutes < on_time_minutes - 60:  # Mehr als 1 Stunde Unterschied = über Mitternacht
+                    should_be_on = current_time_minutes >= on_time_minutes or current_time_minutes < off_time_minutes
+                else:
+                    # Wahrscheinlich ein Konfigurationsfehler (z.B. 15:36 - 15:34)
+                    logger.warning(f"Ungültige Zeitsteuerung: Ausschaltzeit ({off_time_str}) ist vor Einschaltzeit ({on_time_str}). "
+                                 f"Interpretiere als: Bildschirm sollte zwischen {on_time_str} und {off_time_str} AUS sein.")
+                    # Invertiere Logik: Bildschirm sollte zwischen Ausschalt- und Einschaltzeit AUS sein
+                    should_be_on = not (off_time_minutes <= current_time_minutes < on_time_minutes)
             
             # Für zeitgesteuerte Ein/Ausschaltung muss DPMS aktiviert sein
             # Aktiviere DPMS temporär, falls es deaktiviert ist
