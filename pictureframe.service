@@ -17,8 +17,10 @@ Environment="XAUTHORITY=/var/run/lightdm/root/:0"
 ExecStartPre=/bin/sleep 10
 # Verwende setcap-enabled Python für Port 80
 ExecStart=/usr/bin/python3 /home/pi/PictureFrameV3/src/main.py
-Restart=on-failure
+Restart=always
 RestartSec=10
+# Starte auch nach Reboot automatisch
+StartLimitIntervalSec=0
 # Starte nach graphical.target (wenn verfügbar) oder network.target
 StandardOutput=journal
 StandardError=journal
