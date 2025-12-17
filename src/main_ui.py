@@ -4271,9 +4271,12 @@ class MainWindow(QMainWindow):
                     # Wenn DPMS aktiviert ist, können wir den Status nicht direkt prüfen
                     # Aber wir können vermeiden, force on zu verwenden, wenn nicht nötig
                     # Verwende stattdessen einen sanfteren Befehl
-                    subprocess.run(['xset', 'dpms', 'force', 'on'], env=env, 
+                    result = subprocess.run(['xset', 'dpms', 'force', 'on'], env=env, 
                                  capture_output=True, text=True, timeout=5)
-                    logger.debug(f"Bildschirm eingeschaltet (Zeitsteuerung: {on_time_str}-{off_time_str})")
+                    if result.returncode == 0:
+                        logger.info(f"Bildschirm eingeschaltet (Zeitsteuerung: {on_time_str}-{off_time_str})")
+                    else:
+                        logger.warning(f"Fehler beim Einschalten des Bildschirms: {result.stderr}")
                 else:
                     # DPMS ist deaktiviert, Bildschirm ist bereits an
                     logger.debug(f"Bildschirm bereits an (DPMS deaktiviert, Zeitsteuerung: {on_time_str}-{off_time_str})")
