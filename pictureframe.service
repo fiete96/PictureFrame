@@ -1,7 +1,8 @@
 [Unit]
 Description=Picture Frame - Digital Picture Frame Application
-After=network.target
+After=network.target x11.service
 Wants=network-online.target
+Requires=x11.service
 
 [Service]
 Type=simple
@@ -11,10 +12,10 @@ User=root
 Group=root
 WorkingDirectory=/home/pi/PictureFrameV3
 Environment="DISPLAY=:0"
-Environment="XAUTHORITY=/var/run/lightdm/root/:0"
+Environment="XAUTHORITY=/root/.Xauthority"
 Environment="XDG_RUNTIME_DIR=/run/user/0"
-# Warte auf LightDM/X11
-ExecStartPre=/bin/sleep 10
+# Warte auf X11
+ExecStartPre=/bin/sleep 5
 # Verwende setcap-enabled Python für Port 80
 ExecStart=/usr/bin/python3 /home/pi/PictureFrameV3/src/main.py
 Restart=always
