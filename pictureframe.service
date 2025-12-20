@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Port 80 erfordert root-Rechte, aber GUI braucht User pi
-# Verwende setcap für Python, um Port 80 zu binden
-User=pi
-Group=pi
+# Port 80 erfordert root-Rechte
+# Lauf als root für vollständige Funktionalität
+User=root
+Group=root
 WorkingDirectory=/home/pi/PictureFrameV3
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/var/run/lightdm/root/:0"
