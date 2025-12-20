@@ -1,0 +1,16 @@
+[Unit]
+Description=Hide Mouse Cursor
+After=x11.service
+Requires=x11.service
+
+[Service]
+Type=simple
+User=root
+Environment="DISPLAY=:0"
+ExecStart=/usr/bin/unclutter -idle 0.1 -root
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+

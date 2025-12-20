@@ -1,6 +1,6 @@
 [Unit]
 Description=Picture Frame - Digital Picture Frame Application
-After=network.target x11.service
+After=network.target x11.service unclutter.service
 Wants=network-online.target
 Requires=x11.service
 
@@ -16,8 +16,6 @@ Environment="XAUTHORITY=/root/.Xauthority"
 Environment="XDG_RUNTIME_DIR=/run/user/0"
 # Warte auf X11
 ExecStartPre=/bin/sleep 5
-# Blende Mauszeiger aus
-ExecStartPre=/usr/bin/unclutter -idle 0.1 -root
 # Verwende setcap-enabled Python für Port 80
 ExecStart=/usr/bin/python3 /home/pi/PictureFrameV3/src/main.py
 Restart=always
