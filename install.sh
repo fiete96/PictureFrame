@@ -37,9 +37,9 @@ sudo apt-get install -y \
 # Installiere Python-Abhängigkeiten
 echo "Installiere Python-Abhängigkeiten..."
 # Upgrade pip zuerst
-pip3 install --upgrade pip setuptools wheel
+pip3 install --break-system-packages --upgrade pip setuptools wheel
 # Installiere Abhängigkeiten
-pip3 install -r requirements.txt
+pip3 install --break-system-packages -r requirements.txt
 
 # Erstelle benötigte Verzeichnisse
 echo "Erstelle Verzeichnisse..."
