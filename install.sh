@@ -41,8 +41,8 @@ sudo apt-get install -y \
 
 # Installiere Python-Abhängigkeiten
 echo "Installiere Python-Abhängigkeiten..."
-# Upgrade pip zuerst
-sudo pip3 install --break-system-packages --upgrade pip setuptools wheel
+# Upgrade pip (überspringe Fehler wenn pip von Debian installiert wurde)
+sudo pip3 install --break-system-packages --upgrade pip setuptools wheel 2>/dev/null || echo "pip-Upgrade übersprungen (bereits installiert)"
 # Installiere Abhängigkeiten
 sudo pip3 install --break-system-packages -r requirements.txt
 
