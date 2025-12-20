@@ -12,6 +12,7 @@ Group=root
 WorkingDirectory=/home/pi/PictureFrameV3
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/var/run/lightdm/root/:0"
+Environment="XDG_RUNTIME_DIR=/run/user/0"
 # Warte auf LightDM/X11
 ExecStartPre=/bin/sleep 10
 # Verwende setcap-enabled Python für Port 80
