@@ -28,7 +28,12 @@ sudo apt-get install -y \
     libtiff5-dev \
     tcl8.6-dev \
     tk8.6-dev \
-    python3-tk
+    python3-tk \
+    fonts-noto-color-emoji \
+    network-manager \
+    wireless-tools \
+    x11-xserver-utils \
+    xset
 
 # Installiere Python-Abhängigkeiten
 echo "Installiere Python-Abhängigkeiten..."
