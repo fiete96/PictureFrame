@@ -1,8 +1,7 @@
 [Unit]
 Description=Picture Frame - Digital Picture Frame Application
-After=network.target lightdm.service
+After=network.target
 Wants=network-online.target
-Requires=lightdm.service
 
 [Service]
 Type=simple
@@ -19,8 +18,6 @@ ExecStartPre=/bin/sleep 10
 ExecStart=/usr/bin/python3 /home/pi/PictureFrameV3/src/main.py
 Restart=always
 RestartSec=10
-# Starte auch nach Reboot automatisch
-StartLimitIntervalSec=0
 # Starte nach graphical.target (wenn verfügbar) oder network.target
 StandardOutput=journal
 StandardError=journal
