@@ -32,14 +32,19 @@ sudo apt-get install -y \
     fonts-noto-color-emoji \
     network-manager \
     wireless-tools \
-    x11-xserver-utils
+    x11-xserver-utils \
+    xorg \
+    xserver-xorg \
+    xinit \
+    x11-utils \
+    unclutter
 
 # Installiere Python-Abhängigkeiten
 echo "Installiere Python-Abhängigkeiten..."
 # Upgrade pip zuerst
-pip3 install --break-system-packages --upgrade pip setuptools wheel
+sudo pip3 install --break-system-packages --upgrade pip setuptools wheel
 # Installiere Abhängigkeiten
-pip3 install --break-system-packages -r requirements.txt
+sudo pip3 install --break-system-packages -r requirements.txt
 
 # Erstelle benötigte Verzeichnisse
 echo "Erstelle Verzeichnisse..."
@@ -52,6 +57,25 @@ mkdir -p logs
 echo "Setze Berechtigungen..."
 chmod +x src/main.py
 chmod +x setup_bootscreen.sh
+
+# Konfiguriere X11 für 1024x600 Display
+echo "Konfiguriere X11 für Display..."
+sudo mkdir -p /etc/X11/xorg.conf.d
+sudo tee /etc/X11/xorg.conf.d/10-display.conf > /dev/null << 'EOF'
+Section "Monitor"
+    Identifier "HDMI-1"
+    Modeline "1024x600_60.00" 49.00 1024 1072 1168 1312 600 603 613 624 -hsync +vsync
+    Option "PreferredMode" "1024x600_60.00"
+EndSection
+
+Section "Screen"
+    Identifier "Screen0"
+    Monitor "HDMI-1"
+    SubSection "Display"
+        Modes "1024x600_60.00"
+    EndSubSection
+EndSection
+EOF
 
 # Git-Repository einrichten (falls noch nicht vorhanden)
 echo "Richte Git-Repository ein..."
@@ -67,15 +91,38 @@ else
     git remote set-url origin https://github.com/fiete96/PictureFrame.git 2>/dev/null || echo "Remote konnte nicht gesetzt werden"
 fi
 
-# Installiere Systemd-Service (optional)
-read -p "Möchten Sie den Systemd-Service installieren? (j/n) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Jj]$ ]]; then
-    echo "Installiere Systemd-Service..."
-    sudo cp pictureframe.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable pictureframe.service
-    echo "Service installiert. Starten mit: sudo systemctl start pictureframe"
+# Installiere Systemd-Services
+echo "Installiere Systemd-Services..."
+# X11-Service
+sudo cp x11.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable x11.service
+echo "  ✓ x11.service installiert"
+
+# unclutter-Service (Mauszeiger ausblenden)
+sudo cp unclutter.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable unclutter.service
+echo "  ✓ unclutter.service installiert"
+
+# PictureFrame-Service
+sudo cp pictureframe.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable pictureframe.service
+echo "  ✓ pictureframe.service installiert"
+
+# Erstelle config.yaml falls nicht vorhanden
+if [ ! -f config.yaml ]; then
+    echo "Erstelle config.yaml..."
+    cat > config.yaml << 'EOF'
+web:
+  port: 80
+display:
+  width: 1024
+  height: 600
+  fullscreen: true
+EOF
+    echo "  ✓ config.yaml erstellt"
 fi
 
 # Bootscreen-Setup (optional)
@@ -91,9 +138,13 @@ echo ""
 echo "Installation abgeschlossen!"
 echo ""
 echo "Nächste Schritte:"
-echo "1. Bearbeiten Sie config.yaml und konfigurieren Sie Email-Einstellungen"
-echo "2. Starten Sie die Anwendung mit: python3 src/main.py"
-echo "3. Öffnen Sie http://localhost:8080 im Browser für das Webinterface"
+echo "1. Bearbeiten Sie config.yaml und konfigurieren Sie Email-Einstellungen (optional)"
+echo "2. Starten Sie die Services mit:"
+echo "   sudo systemctl start x11"
+echo "   sudo systemctl start unclutter"
+echo "   sudo systemctl start pictureframe"
+echo "3. Oder starten Sie alle Services mit:"
+echo "   sudo reboot"
 echo ""
-echo "Für Autostart: sudo systemctl start pictureframe"
-
+echo "Das Web-Interface ist erreichbar unter: http://$(hostname -I | awk '{print $1}')"
+echo ""
