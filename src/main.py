@@ -227,6 +227,22 @@ def main():
                 # Stelle sicher, dass das Fenster sofort sichtbar ist
                 app.processEvents()
                 
+                # Stelle sicher, dass Fenster richtig positioniert ist (nach show())
+                # Warte kurz, damit X11 das Fenster erstellt hat
+                time_module.sleep(0.1)
+                app.processEvents()
+                
+                # Setze Fensterposition explizit (falls nicht im Fullscreen)
+                if not window.isFullScreen():
+                    screen = app.primaryScreen()
+                    screen_geometry = screen.geometry()
+                    window_width = window.config.get('display.width', 1024)
+                    window_height = window.config.get('display.height', 600)
+                    x = (screen_geometry.width() - window_width) // 2
+                    y = (screen_geometry.height() - window_height) // 2
+                    window.setGeometry(x, y, window_width, window_height)
+                    app.processEvents()
+                
                 logger.info("Hauptanwendung mit GUI gestartet")
                 
                 # Initialisiere langwierige Komponenten NACH dem Anzeigen des Fensters

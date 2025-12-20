@@ -3544,11 +3544,22 @@ class MainWindow(QMainWindow):
         
         # Vollbild-Modus
         if self.config.get('display.fullscreen', True):
-            self.showFullScreen()
-        else:
+            # Stelle sicher, dass Fenster richtig positioniert wird
+            # Setze zuerst die Größe, dann Fullscreen
             self.setGeometry(0, 0, 
                            self.config.get('display.width', 1024),
                            self.config.get('display.height', 600))
+            QApplication.processEvents()  # Stelle sicher, dass Größe gesetzt wurde
+            self.showFullScreen()
+        else:
+            # Zentriere Fenster auf Bildschirm
+            screen = QApplication.primaryScreen()
+            screen_geometry = screen.geometry()
+            window_width = self.config.get('display.width', 1024)
+            window_height = self.config.get('display.height', 600)
+            x = (screen_geometry.width() - window_width) // 2
+            y = (screen_geometry.height() - window_height) // 2
+            self.setGeometry(x, y, window_width, window_height)
         
         # Stacked Widget für verschiedene Ansichten
         self.stacked = QStackedWidget()
