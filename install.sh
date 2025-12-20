@@ -32,8 +32,7 @@ sudo apt-get install -y \
     fonts-noto-color-emoji \
     network-manager \
     wireless-tools \
-    x11-xserver-utils \
-    xset
+    x11-xserver-utils
 
 # Installiere Python-Abhängigkeiten
 echo "Installiere Python-Abhängigkeiten..."
