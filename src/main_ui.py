@@ -3500,7 +3500,9 @@ class MainWindow(QMainWindow):
                 # Das verhindert Blockierung der GUI
                 QTimer.singleShot(50, lambda: self.slideshow_widget.load_current_image(use_fade=False))
             else:
-                logger.info("Keine Bilder vorhanden beim Start")
+                logger.info("Keine Bilder vorhanden beim Start - zeige Platzhalter")
+                # Zeige Platzhalter, wenn keine Bilder vorhanden sind
+                QTimer.singleShot(50, lambda: self.slideshow_widget.show_placeholder())
             
             logger.info("Slideshow initialisiert")
         except Exception as e:
