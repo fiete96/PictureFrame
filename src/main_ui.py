@@ -3789,7 +3789,7 @@ class MainWindow(QMainWindow):
                 # Erstelle beide QR-Codes
                 port = self.config.get('web.port', 80)
                 web_url = f"http://{ip_text}:{port}"
-                shortcut_url = "https://www.icloud.com/shortcuts/a309109b0b774647aad21dbbbe0a864c"
+                shortcut_url = "https://www.icloud.com/shortcuts/489dca9cfbac49fa8d682db488b964f4"
                 
                 # Funktion zum Erstellen eines QR-Codes
                 def create_qr_code(data):
